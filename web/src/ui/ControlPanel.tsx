@@ -105,11 +105,13 @@ export type ControlPanelProps = {
   rankRamp: [number, number] | null;
   useWeather: boolean;
   onUseWeatherChange: (v: boolean) => void;
-  showPerimeters: boolean;
-  onShowPerimetersChange: (v: boolean) => void;
-  /** Perimeters of fires discovered in the run's window, and their acres. */
-  perimeterCount: number;
-  perimeterAcres: number;
+  standingAlpha: number;
+  onStandingAlphaChange: (v: number) => void;
+  wxGate: number;
+  onWxGateChange: (v: number) => void;
+  /** The weather term under the cursor, to read the gate against. */
+  wxNow: number | null;
+
 
   teacher: Teacher;
   onTeacherChange: (t: Teacher) => void;
@@ -282,21 +284,29 @@ export function ControlPanel(p: ControlPanelProps) {
                 </Field>
               </>
             )}
+            <Field
+              label={
+                <span className="row">
+                  <span>{p.standingAlpha === 0 ? "Standing picture: off (hidden below the line)" : `Standing picture at ${Math.round(p.standingAlpha * 100)}% opacity`}</span>
+                  <Help label="Standing picture">
+                    The ground's own probability, faint all the time, so the where is always on screen; where the hour's weather term
+                    crosses the gate the pixel goes opaque and its color takes the full hour (ground plus weather). At 0 the picture is
+                    only what crosses the hide line.
+                  </Help>
+                </span>
+              }
+            >
+              <Slider min={0} max={0.6} step={0.05} value={p.standingAlpha} onChange={p.onStandingAlphaChange} label="Standing opacity" onReset={() => p.onStandingAlphaChange(0.25)} />
+            </Field>
+            {p.standingAlpha > 0 ? (
+              <Field label={`Weather gate: opaque from a weather term of ${p.wxGate >= 0 ? "+" : ""}${p.wxGate.toFixed(1)}${p.wxNow != null ? ` (under the cursor now ${p.wxNow >= 0 ? "+" : ""}${p.wxNow.toFixed(1)})` : ""}`}>
+                <Slider min={-2} max={4} step={0.1} value={p.wxGate} onChange={p.onWxGateChange} label="Weather gate" onReset={() => p.onWxGateChange(1.0)} />
+              </Field>
+            ) : null}
             <div className="row">
               <Check checked={!p.useWeather} onChange={(v) => p.onUseWeatherChange(!v)} label="Ground alone (leave the hour's weather out)" />
             </div>
-            <div className="row">
-              <Check
-                checked={p.showPerimeters}
-                onChange={p.onShowPerimetersChange}
-                label={`Burn perimeters of the fires that started in this window: ${p.perimeterCount} (${Math.round(p.perimeterAcres).toLocaleString()} acres)`}
-              />
-              <Help label="Perimeters">
-                The outline of the ground each fire took (NIFC WFIGS perimeters, {AEF_YEAR + 1}), drawn at the fire's discovery hour and held. An
-                end state, not the fire at that hour. Nothing is filled: the question is whether the ground inside was lit before the fire,
-                and the ground outside was not. The embeddings are {AEF_YEAR}, the year before.
-              </Help>
-            </div>
+            {/* burn perimeters: not drawn for now (TODO GeoArrow); see App.tsx */}
           </>
         ) : (
           <div className="row">

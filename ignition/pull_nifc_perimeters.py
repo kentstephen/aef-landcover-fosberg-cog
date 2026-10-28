@@ -3,7 +3,7 @@
 # dependencies = ["requests"]
 # ///
 """Every wildfire perimeter of one year from NIFC's WFIGS Interagency Perimeters service (the current
-year's perimeters; MTBS lags a year), with the fire's discovery time, cause and acres, as
+year's perimeters; MTBS lags a year), with the fire's discovery, containment and out times, cause and acres, as
 web/public/perimeters-<year>.geojson for the map (geometry simplified by the service to about 30 m).
 
     uv run ignition/pull_nifc_perimeters.py --year 2025
@@ -17,7 +17,8 @@ import requests
 
 D = Path(__file__).resolve().parent.parent
 URL = "https://services3.arcgis.com/T4QMspbfLg3qTGWY/arcgis/rest/services/WFIGS_Interagency_Perimeters/FeatureServer/0/query"
-FIELDS = ["poly_IncidentName", "poly_GISAcres", "poly_IRWINID", "attr_FireDiscoveryDateTime", "attr_FireCause", "attr_IncidentSize", "attr_POOState"]
+FIELDS = ["poly_IncidentName", "poly_GISAcres", "poly_IRWINID", "attr_FireDiscoveryDateTime", "attr_ContainmentDateTime", "attr_FireOutDateTime",
+          "attr_FireCause", "attr_IncidentSize", "attr_POOState"]
 
 
 def main():
@@ -38,7 +39,8 @@ def main():
             p = f["properties"]
             disc = p.get("attr_FireDiscoveryDateTime")
             f["properties"] = {"name": p.get("poly_IncidentName"), "acres": p.get("poly_GISAcres"), "irwin": p.get("poly_IRWINID"),
-                               "discovered_ms": disc, "cause": p.get("attr_FireCause"), "size": p.get("attr_IncidentSize"), "state": p.get("attr_POOState")}
+                               "discovered_ms": disc, "contained_ms": p.get("attr_ContainmentDateTime"), "out_ms": p.get("attr_FireOutDateTime"),
+                               "cause": p.get("attr_FireCause"), "size": p.get("attr_IncidentSize"), "state": p.get("attr_POOState")}
         feats.extend(got)
         print(f"{off}: +{len(got)} ({len(feats)})", flush=True)
         # pages come back short of 2000 when the response size limit bites, so only an empty page ends it

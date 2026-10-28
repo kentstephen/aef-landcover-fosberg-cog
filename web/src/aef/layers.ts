@@ -70,6 +70,9 @@ export type AefLayerOpts = {
   zLo: number;
   zHi: number;
   useWeather: boolean;
+  /** The standing picture (0 = off): faint everywhere, opaque where the weather term crosses wxGate. */
+  standingAlpha: number;
+  wxGate: number;
   /** Hours of afterglow (0 = this hour only). */
   glowHours: number;
   /** Grain cells across a tile (0 = flat fill). */
@@ -290,6 +293,8 @@ export class AefLayers {
       zLo: o.zLo,
       zHi: o.zHi,
       useWeather: o.useWeather ? 1 : 0,
+      standingAlpha: o.standingAlpha,
+      wxGate: o.wxGate,
       glowHours: o.glowHours,
       grain: o.grain,
     });
@@ -308,7 +313,7 @@ export class AefLayers {
     }
     // debug hook for the headless probe (this instance is the one deck draws from)
     (globalThis as unknown as { __aef?: unknown }).__aef = { layers: this, cache: this.cache };
-    const key = `${opts.mode}|${opts.teacher}|${opts.leadTimeIdx}|${opts.hideBelow}|${opts.rescaleMax}|${opts.pHide}|${opts.pMax}|${opts.scale}|${opts.zLo}|${opts.zHi}|${opts.useWeather}|${opts.glowHours}|${opts.grain}`;
+    const key = `${opts.mode}|${opts.teacher}|${opts.leadTimeIdx}|${opts.hideBelow}|${opts.rescaleMax}|${opts.pHide}|${opts.pMax}|${opts.scale}|${opts.zLo}|${opts.zHi}|${opts.useWeather}|${opts.standingAlpha}|${opts.wxGate}|${opts.glowHours}|${opts.grain}`;
     if (key !== this.lastKey) {
       this.lastKey = key;
       this.version++;

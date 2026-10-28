@@ -4,13 +4,24 @@ import { GeoJsonLayer } from "@deck.gl/layers";
  * The real fires as areas, the frame the ignition picture is judged in: a burn perimeter per fire
  * (NIFC WFIGS for the current year, MTBS for earlier ones; ignition/pull_nifc_perimeters.py and
  * pull_perimeters.py write perimeters-<year>.geojson). A perimeter is an end state, the ground the
- * fire took, so it is drawn as an outline only, appearing at the fire's discovery hour and holding,
- * and the ground shows through it untouched: was the ground inside lit before the fire, and was the
- * ground outside not. No fill, nothing drawn before the fire's hour.
+ * fire took, so it is drawn as an outline only, and only while the fire burned: from its discovery
+ * hour until it was called out (or contained, when no out time is recorded; NO_END_H after discovery
+ * when neither is). The ground shows through it untouched: was the ground inside lit before the fire,
+ * and was the ground outside not. No fill, nothing drawn before the fire's hour or after its end.
  */
 export type Perimeter = {
   type: "Feature";
-  properties: { name: string | null; acres: number | null; cause: string | null; discovered_ms: number | null; ig_date?: string };
+  properties: {
+    name: string | null;
+    acres: number | null;
+    cause: string | null;
+    discovered_ms: number | null;
+    contained_ms?: number | null;
+    out_ms?: number | null;
+    ig_date?: string;
+    /** When the fire stops being drawn, filled in on load. */
+    end_ms?: number;
+  };
   geometry: GeoJSON.Geometry;
 };
 
@@ -26,15 +37,22 @@ export async function loadPerimeters(baseUrl: string, year: number): Promise<Per
       p.discovered_ms = iso ? Date.parse(iso) : null;
     }
   }
-  return fc.features.filter((f) => f.properties.discovered_ms != null);
+  const out = fc.features.filter((f) => f.properties.discovered_ms != null);
+  for (const f of out) {
+    const p = f.properties;
+    p.end_ms = p.out_ms ?? p.contained_ms ?? p.discovered_ms! + NO_END_H * 3600e3;
+  }
+  return out;
 }
 
-/** Perimeters of fires discovered from BEFORE_H before the run's +0 up to its +48 h. */
-const BEFORE_H = 24;
+/** A fire with no out or containment time on record is drawn this long after discovery (1145 of 7548 in 2025). */
+const NO_END_H = 72;
+
+/** Perimeters of fires burning at some hour of the run (+0 to +48 h). */
 export function perimetersInRun(all: Perimeter[], initTime: Date): Perimeter[] {
-  const t0 = initTime.getTime() - BEFORE_H * 3600e3;
-  const t1 = initTime.getTime() + 48 * 3600e3;
-  return all.filter((f) => f.properties.discovered_ms! >= t0 && f.properties.discovered_ms! <= t1);
+  const t0 = initTime.getTime();
+  const t1 = t0 + 48 * 3600e3;
+  return all.filter((f) => f.properties.discovered_ms! <= t1 && f.properties.end_ms! >= t0);
 }
 
 /** Warm white, one stroke, no casing: reads over viridis and over the dark map alike. */
@@ -44,7 +62,7 @@ export function perimeterLayer(o: { perimeters: Perimeter[]; initTime: Date; lea
   const now = o.initTime.getTime() + o.leadHours * 3600e3;
   return new GeoJsonLayer<Perimeter["properties"]>({
     id: "fire-perimeters",
-    data: o.perimeters.filter((f) => f.properties.discovered_ms! <= now) as never,
+    data: o.perimeters.filter((f) => f.properties.discovered_ms! <= now && f.properties.end_ms! >= now) as never,
     filled: false,
     stroked: true,
     getLineColor: LINE,

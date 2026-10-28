@@ -13,10 +13,12 @@ import { Map as MaplibreMap } from "react-map-gl/maplibre";
 import type * as zarr from "zarrita";
 import { fuelOf } from "./aef/fuel.js";
 // import { fireLayers, firesInRun, loadFires, type Fires } from "./fires.js";
-import { loadPerimeters, type Perimeter, perimeterLayer, perimetersInRun } from "./perimeters.js";
+// the burn perimeters (perimeters.ts): not drawn for now; TODO draw them from GeoArrow (deck.gl-geoarrow) rather
+// than a 7 MB GeoJSON parsed on the main thread, and only while each fire burned
+// import { loadPerimeters, type Perimeter, perimeterLayer, perimetersInRun } from "./perimeters.js";
 import { HEADS, NO_CLASS, type Teacher } from "./aef/head.js";
 import { AefLayers } from "./aef/layers.js";
-import { type AefArray, AEF_YEAR, MOSAIC_MIN_ZOOM, openAefMosaic } from "./aef/mosaic.js";
+import { type AefArray, MOSAIC_MIN_ZOOM, openAefMosaic } from "./aef/mosaic.js";
 import { AefPool } from "./aef/pool.js";
 import { CoarsePool } from "./aef/coarse.js";
 import { type AefIndex, loadAefIndex } from "./aef/index.js";
@@ -131,16 +133,10 @@ export default function App() {
   // const [showFires, setShowFires] = useState(true);
   // const fireList = useMemo(() => (fires && source ? firesInRun(fires, dateFromInitTimeIdx(initTimeIdx)) : []), [fires, source, initTimeIdx]);
   // ---- the burn perimeters of the fires (the year after the embeddings), the frame for the picture
-  const [perimeters, setPerimeters] = useState<Perimeter[]>([]);
-  useEffect(() => {
-    let gone = false;
-    loadPerimeters(import.meta.env.BASE_URL, AEF_YEAR + 1)
-      .then((f) => { if (!gone) setPerimeters(f); })
-      .catch((e) => { if (!gone) setError(`perimeters: ${String(e)}`); });
-    return () => { gone = true; };
-  }, []);
-  const [showPerimeters, setShowPerimeters] = useState(true);
-  const runPerimeters = useMemo(() => (source ? perimetersInRun(perimeters, dateFromInitTimeIdx(initTimeIdx)) : []), [perimeters, source, initTimeIdx]);
+  // const [perimeters, setPerimeters] = useState<Perimeter[]>([]);
+  // useEffect(() => { loadPerimeters(import.meta.env.BASE_URL, AEF_YEAR + 1).then(setPerimeters).catch((e) => setError(`perimeters: ${String(e)}`)); }, []);
+  // const [showPerimeters, setShowPerimeters] = useState(true);
+  // const runPerimeters = useMemo(() => (source ? perimetersInRun(perimeters, dateFromInitTimeIdx(initTimeIdx)) : []), [perimeters, source, initTimeIdx]);
   const [aefVersion, setAefVersion] = useState(0);
   const needWeatherRef = useRef<(px: Int16Array, py: Int16Array) => void>(() => {});
   const aefLayers = useMemo(() => {
@@ -223,6 +219,9 @@ export default function App() {
   const [qHi, setQHi] = useState(0.99);
   /** The weather term left out: the ground alone. */
   const [useWeather, setUseWeather] = useState(true);
+  /** The standing picture: the ground's probability faint all the time, opaque where the hour's weather crosses the gate. */
+  const [standingAlpha, setStandingAlpha] = useState(0.25);
+  const [wxGate, setWxGate] = useState(1.0);
   // one picture at a time: drawing the field puts the ground off, and the ground back on puts the field away
   const setShowRaster = useCallback((on: boolean) => {
     setShowRasterState(on);
@@ -310,9 +309,10 @@ export default function App() {
     const weight = ci === NO_CLASS ? 0 : fuelOf(teacher, ci);
     const ffwi = wx?.ffwi ?? NaN;
     const wl = px ? cacheRef.current.ignitionAt(px.x, px.y, leadTimeIdx) : NaN;
+    const wx0 = wl;
     const ignP = ground && Number.isFinite(wl) ? 1 / (1 + Math.exp(-(ground.ign + wl))) : NaN;
     const groundP = ground ? 1 / (1 + Math.exp(-ground.ign)) : NaN;
-    return { wx, ground, className, weight, lit: Number.isFinite(ffwi) ? ffwi * weight : NaN, ignP, groundP };
+    return { wx, ground, className, weight, lit: Number.isFinite(ffwi) ? ffwi * weight : NaN, ignP, groundP, wx0 };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hover, leadTimeIdx, cacheVersion, aefLayers, aefVersion, teacher]);
 
@@ -392,6 +392,8 @@ export default function App() {
           zLo: ignScale === "rank" ? (rankRamp ? rankRamp[0] : 99) : zLo,
           zHi: ignScale === "rank" ? (rankRamp ? rankRamp[1] : 100) : zHi,
           useWeather,
+          standingAlpha,
+          wxGate,
           glowHours,
           grain,
           light,
@@ -401,9 +403,7 @@ export default function App() {
         }),
       );
     }
-    if (runPerimeters.length > 0) {
-      out.push(perimeterLayer({ perimeters: runPerimeters, initTime: dateFromInitTimeIdx(initTimeIdx), leadHours: leadTimeIdx, visible: showPerimeters, beforeId: BEFORE_ID }));
-    }
+    // if (runPerimeters.length > 0) out.push(perimeterLayer({ perimeters: runPerimeters, initTime: dateFromInitTimeIdx(initTimeIdx), leadHours: leadTimeIdx, visible: showPerimeters, beforeId: BEFORE_ID }));
     // if (fireList.length > 0) out.push(...fireLayers({ fires: fireList, initTime: dateFromInitTimeIdx(initTimeIdx), leadHours: leadTimeIdx, visible: showFires, beforeId: BEFORE_ID }));
     if (contourLines.length > 0) {
       out.push(
@@ -427,7 +427,7 @@ export default function App() {
   }, [
     showRaster, source, getTileData, colormapTexture, initTimeIdx, windMode, rasterVariable, selection, renderTile, rasterOpacity,
     leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity, zoom,
-    glowHours, grain, light, contourLines, pHide, pMax, ignScale, zLo, zHi, rankRamp, useWeather, runPerimeters, showPerimeters,
+    glowHours, grain, light, contourLines, pHide, pMax, ignScale, zLo, zHi, rankRamp, useWeather, standingAlpha, wxGate,
   ]);
 
   const status: Status = {
@@ -542,10 +542,12 @@ export default function App() {
         rankRamp={rankRamp}
         useWeather={useWeather}
         onUseWeatherChange={setUseWeather}
-        showPerimeters={showPerimeters}
-        onShowPerimetersChange={setShowPerimeters}
-        perimeterCount={runPerimeters.length}
-        perimeterAcres={runPerimeters.reduce((a, f) => a + (f.properties.acres ?? 0), 0)}
+        standingAlpha={standingAlpha}
+        onStandingAlphaChange={setStandingAlpha}
+        wxGate={wxGate}
+        onWxGateChange={setWxGate}
+        wxNow={hoverInfo && Number.isFinite(hoverInfo.wx0) ? hoverInfo.wx0 : null}
+
 
         teacher={teacher}
         onTeacherChange={setTeacher}
@@ -584,7 +586,7 @@ export default function App() {
         <div style={tooltipStyle(hover.x, hover.y)}>
           <div style={{ fontWeight: 600 }}>
             {hoverInfo.ground
-              ? `ignition ${Number.isFinite(hoverInfo.ignP) ? `${Math.round(hoverInfo.ignP * 100)}%` : "?"} this hour · ground alone ${Math.round(hoverInfo.groundP * 100)}%`
+              ? `ignition ${Number.isFinite(hoverInfo.ignP) ? `${Math.round(hoverInfo.ignP * 100)}%` : "?"} this hour · ground alone ${Math.round(hoverInfo.groundP * 100)}%${Number.isFinite(hoverInfo.wx0) ? ` · weather term ${hoverInfo.wx0 >= 0 ? "+" : ""}${hoverInfo.wx0.toFixed(1)}` : ""}`
               : "no embedding here"}
           </div>
           <div style={{ color: "#bbb" }}>

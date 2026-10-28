@@ -26,6 +26,13 @@ export type FuelLightProps = {
   zHi: number;
   /** 0 = the ground alone (the weather term left out), 1 = ground plus the hour's weather. */
   useWeather: number;
+  /**
+   * The standing picture: above 0, every pixel with ground is drawn at this opacity colored by the ground
+   * alone, and goes opaque, colored by ground plus the hour, where the weather term crosses wxGate.
+   * At 0 the hide line applies instead (nothing drawn below it).
+   */
+  standingAlpha: number;
+  wxGate: number;
   layerIndex: number;
   hideBelow: number;
   rescaleMax: number;
@@ -63,6 +70,8 @@ uniform ${MODULE_NAME}Uniforms {
   float zLo;
   float zHi;
   float useWeather;
+  float standingAlpha;
+  float wxGate;
 } ${MODULE_NAME};
 `,
   inject: {
@@ -89,9 +98,11 @@ float fuelHash(vec2 p) {
         // with the afterglow on, the brightest of the hours behind, each losing 0.3 logit per hour
         float g = texture(groundTex, geometry.uv).r * ${IGN_HI - IGN_LO}.0 + (${IGN_LO}.0);
         float z = g;
+        // the hour's weather term, with the afterglow: the strongest recent hour, losing 0.3 logit per hour
+        float wx = -99.0;
         if (${MODULE_NAME}.useWeather > 0.5) {
           float wl = texture(ffwiTex, vec3(geometry.uv, ${MODULE_NAME}.layerIndex)).r;
-          z = isnan(wl) ? -99.0 : g + wl;
+          if (!isnan(wl)) wx = wl;
           int back = int(min(${MODULE_NAME}.glowHours, 48.0));
           for (int k = 1; k <= 48; k++) {
             if (k > back) break;
@@ -99,19 +110,24 @@ float fuelHash(vec2 p) {
             if (l < 0.0) break;
             float wk = texture(ffwiTex, vec3(geometry.uv, l)).r;
             if (isnan(wk)) continue;
-            z = max(z, g + wk - 0.3 * float(k));
+            wx = max(wx, wk - 0.3 * float(k));
           }
+          z = g + wx;
         }
+        bool standing = ${MODULE_NAME}.standingAlpha > 0.0 && ${MODULE_NAME}.useWeather > 0.5;
+        // standing: how far the weather is across the gate (0 = calm, 1 = lit), over half a logit
+        float lit = standing ? smoothstep(${MODULE_NAME}.wxGate, ${MODULE_NAME}.wxGate + 0.5, wx) : 1.0;
+        float zc = standing ? mix(g, z, lit) : z;
         float t;
         if (${MODULE_NAME}.scale > 0.5) {
-          if (z < ${MODULE_NAME}.zLo) discard;
-          t = clamp((z - ${MODULE_NAME}.zLo) / max(${MODULE_NAME}.zHi - ${MODULE_NAME}.zLo, 0.01), 0.0, 1.0);
+          if (!standing && zc < ${MODULE_NAME}.zLo) discard;
+          t = clamp((zc - ${MODULE_NAME}.zLo) / max(${MODULE_NAME}.zHi - ${MODULE_NAME}.zLo, 0.01), 0.0, 1.0);
         } else {
-          float pr = 1.0 / (1.0 + exp(-z));
-          if (pr < ${MODULE_NAME}.pHide) discard;
+          float pr = 1.0 / (1.0 + exp(-zc));
+          if (!standing && pr < ${MODULE_NAME}.pHide) discard;
           t = clamp((pr - ${MODULE_NAME}.pHide) / max(${MODULE_NAME}.pMax - ${MODULE_NAME}.pHide, 0.0001), 0.0, 1.0);
         }
-        float a = min(1.0, t / 0.15);
+        float a = standing ? mix(${MODULE_NAME}.standingAlpha, 1.0, lit) : min(1.0, t / 0.15);
         if (${MODULE_NAME}.grain > 0.0) {
           vec2 cell = floor(geometry.uv * ${MODULE_NAME}.grain);
           float h = fuelHash(cell + vec2(0.37, 0.91));
@@ -151,7 +167,7 @@ float fuelHash(vec2 p) {
       }
     `,
   },
-  uniformTypes: { mode: "f32", layerIndex: "f32", hideBelow: "f32", rescaleMax: "f32", glowHours: "f32", grain: "f32", pHide: "f32", pMax: "f32", scale: "f32", zLo: "f32", zHi: "f32", useWeather: "f32" },
+  uniformTypes: { mode: "f32", layerIndex: "f32", hideBelow: "f32", rescaleMax: "f32", glowHours: "f32", grain: "f32", pHide: "f32", pMax: "f32", scale: "f32", zLo: "f32", zHi: "f32", useWeather: "f32", standingAlpha: "f32", wxGate: "f32" },
   getUniforms: (p: Partial<FuelLightProps>) => ({
     mode: p.mode ?? 0,
     layerIndex: p.layerIndex ?? 0,
@@ -165,6 +181,8 @@ float fuelHash(vec2 p) {
     zLo: p.zLo ?? 0,
     zHi: p.zHi ?? 4,
     useWeather: p.useWeather ?? 1,
+    standingAlpha: p.standingAlpha ?? 0,
+    wxGate: p.wxGate ?? 1,
     classTex: p.classTex,
     groundTex: p.groundTex,
     ffwiTex: p.ffwiTex,
