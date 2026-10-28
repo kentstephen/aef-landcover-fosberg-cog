@@ -6,6 +6,7 @@ import { fosbergBlock, M_SCALE, MS_TO_MPH, U16_NAN, WIND_SCALE, type WindMode } 
 import { FFWI_BANDS, HRRR_LEAD_TIME_COUNT, HRRR_SHARD } from "./metadata.js";
 import type { HrrrArrays } from "./store.js";
 import type { FfwiTile, FfwiTileCache } from "./tile-cache.js";
+import { shardFromDisk, shardKey, shardToDisk } from "./shard-disk.js";
 import type { RasterVariable } from "./variables.js";
 
 /**
@@ -28,6 +29,7 @@ export type MakeGetTileDataArgs = {
   cache: FfwiTileCache;
   windMode: WindMode;
   variable: RasterVariable;
+  initTimeIdx: number;
 };
 
 /** IEEE half-float bits for a float32 (round-to-nearest-even; NaN/Inf preserved). */
@@ -81,12 +83,40 @@ function halfTexture(device: Device, width: number, height: number, values: Floa
  * layout array (temperature_2m).
  */
 export function makeGetTileData(args: MakeGetTileDataArgs) {
-  const { arrays, cache, windMode, variable } = args;
+  const { arrays, cache, windMode, variable, initTimeIdx } = args;
   return async function getTileData(
     _arr: zarr.Array<"float32", zarr.Readable>,
     options: GetTileDataOptions,
   ): Promise<FfwiTileData> {
     const { device, sliceSpec, width, height, signal } = options;
+
+    // sliceSpec = [init, lead-slice, y-slice, x-slice]
+    const spatial = sliceSpec
+      .filter((s): s is zarr.Slice => !!s && typeof s === "object" && "start" in s)
+      .slice(-2);
+    const tileY = spatial[0]?.start ?? 0;
+    const tileX = spatial[1]?.start ?? 0;
+    const shardRow = Math.floor(tileY / HRRR_SHARD.height);
+    const shardCol = Math.floor(tileX / HRRR_SHARD.width);
+    const n0 = HRRR_LEAD_TIME_COUNT * height * width;
+
+    // the FFWI inputs kept on disk from an earlier look at this run: no fetch, no Fosberg pass
+    if (variable === "ffwi") {
+      const key = shardKey(initTimeIdx, windMode, shardRow, shardCol);
+      const kept = await shardFromDisk(key, n0);
+      if (kept) {
+        const mF = new Float32Array(n0);
+        const wF = new Float32Array(n0);
+        for (let i = 0; i < n0; i++) {
+          mF[i] = kept.mEq[i] === U16_NAN ? NaN : kept.mEq[i]! / M_SCALE;
+          wF[i] = kept.wind[i] === U16_NAN ? NaN : kept.wind[i]! / WIND_SCALE;
+        }
+        const texture = halfTexture(device, width, height, mF);
+        const windTexture = halfTexture(device, width, height, wF);
+        cache.set({ key: `${shardRow},${shardCol}`, rowStart: tileY, colStart: tileX, width, height, ...kept, mLag: kept.mEq });
+        return { texture, windTexture, width, height, tileX, tileY, byteLength: n0 * 4 };
+      }
+    }
 
     const chunks = await Promise.all(FFWI_BANDS.map((band) => zarr.get(arrays[band], sliceSpec, { signal })));
     const first = chunks[0]!;
@@ -143,16 +173,9 @@ export function makeGetTileData(args: MakeGetTileDataArgs) {
       byteLength = field.byteLength;
     }
 
-    // sliceSpec = [init, lead-slice, y-slice, x-slice]
-    const spatial = sliceSpec
-      .filter((s): s is zarr.Slice => !!s && typeof s === "object" && "start" in s)
-      .slice(-2);
-    const tileY = spatial[0]?.start ?? 0;
-    const tileX = spatial[1]?.start ?? 0;
-
     // Key by the shard grid (edge tiles are narrower than a full shard).
     const tile: FfwiTile = {
-      key: `${Math.floor(tileY / HRRR_SHARD.height)},${Math.floor(tileX / HRRR_SHARD.width)}`,
+      key: `${shardRow},${shardCol}`,
       rowStart: tileY,
       colStart: tileX,
       width,
@@ -163,6 +186,7 @@ export function makeGetTileData(args: MakeGetTileDataArgs) {
       rh: rhU8,
       tc: tcU8,
     };
+    shardToDisk(shardKey(initTimeIdx, windMode, shardRow, shardCol), tile);
     cache.set(tile);
 
     return { texture, windTexture, width, height, tileX, tileY, byteLength };

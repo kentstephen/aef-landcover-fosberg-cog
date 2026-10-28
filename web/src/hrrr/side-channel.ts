@@ -2,6 +2,7 @@ import * as zarr from "zarrita";
 import { fosbergBlock, type WindMode } from "../ffwi/compute.js";
 import { FFWI_BANDS, HRRR_GRID, HRRR_LEAD_TIME_COUNT, HRRR_SHARD } from "./metadata.js";
 import type { HrrrArrays } from "./store.js";
+import { shardFromDisk, shardKey, shardToDisk } from "./shard-disk.js";
 import { FfwiTileCache, type FfwiTile } from "./tile-cache.js";
 
 /**
@@ -79,12 +80,19 @@ export class SideChannel {
     const colEnd = Math.min(colStart + HRRR_SHARD.width, HRRR_GRID.width);
     const height = rowEnd - rowStart;
     const width = colEnd - colStart;
+    const n = HRRR_LEAD_TIME_COUNT * height * width;
+    const key = shardKey(initTimeIdx, windMode, row, col);
+    const kept = await shardFromDisk(key, n);
+    if (kept) {
+      if (signal.aborted) return;
+      this.cache.set({ key: `${row},${col}`, rowStart, colStart, width, height, ...kept, mLag: kept.mEq });
+      return;
+    }
     const slices = [initTimeIdx, null, zarr.slice(rowStart, rowEnd), zarr.slice(colStart, colEnd)];
     const chunks = await Promise.all(
       FFWI_BANDS.map((b) => zarr.get(this.arrays[b], slices, { signal })),
     );
     if (signal.aborted) return;
-    const n = HRRR_LEAD_TIME_COUNT * height * width;
     const mEq = new Uint16Array(n);
     const wind = new Uint16Array(n);
     const rh = new Uint8Array(n);
@@ -103,6 +111,7 @@ export class SideChannel {
       tc,
     );
     const tile: FfwiTile = { key: `${row},${col}`, rowStart, colStart, width, height, mEq, mLag: mEq, wind, rh, tc };
+    shardToDisk(key, tile);
     this.cache.set(tile);
   }
 }

@@ -15,7 +15,8 @@ import { HEADS, NO_CLASS, type Teacher } from "./aef/head.js";
 import { AefLayers } from "./aef/layers.js";
 import { type AefArray, openAefMosaic } from "./aef/mosaic.js";
 import { AefPool } from "./aef/pool.js";
-import { type AefSource, loadAefIndex } from "./aef/sources.js";
+import { CoarsePool } from "./aef/coarse.js";
+import { type AefIndex, loadAefIndex } from "./aef/index.js";
 import type { WindMode } from "./ffwi/compute.js";
 import { makeGetTileData, type FfwiTileData } from "./hrrr/get-tile-data.js";
 import { dateFromInitTimeIdx, HRRR_GEOZARR_ATTRS, HRRR_LEAD_TIME_COUNT, initTimeIdxFromDate, lonLatToHrrrPixel } from "./hrrr/metadata.js";
@@ -75,11 +76,12 @@ export default function App() {
 
   // ---- the embeddings: the tile index, the mosaic, the worker pool, the layer controller
   const poolRef = useRef<AefPool | null>(null);
-  const [aefIndex, setAefIndex] = useState<AefSource[] | null>(null);
+  const coarseRef = useRef<CoarsePool | null>(null);
+  const [aefIndex, setAefIndex] = useState<AefIndex | null>(null);
   const [mosaic, setMosaic] = useState<{ arr: AefArray; attrs: unknown } | null>(null);
   useEffect(() => {
     let gone = false;
-    loadAefIndex()
+    loadAefIndex(import.meta.env.BASE_URL)
       .then((i) => { if (!gone) setAefIndex(i); })
       .catch((e) => { if (!gone) setError(`AEF index: ${String(e)}`); });
     openAefMosaic()
@@ -92,8 +94,10 @@ export default function App() {
   const aefLayers = useMemo(() => {
     if (!aefIndex || !mosaic) return null;
     if (!poolRef.current) poolRef.current = new AefPool();
+    if (!coarseRef.current) coarseRef.current = new CoarsePool(import.meta.env.BASE_URL);
     const l = new AefLayers(
       poolRef.current,
+      coarseRef.current,
       cacheRef.current,
       aefIndex,
       mosaic,
@@ -219,8 +223,8 @@ export default function App() {
   // ---- layers
   const selection = useMemo(() => buildSelection(initTimeIdx), [initTimeIdx]);
   const getTileData = useMemo(
-    () => (source ? makeGetTileData({ arrays: source.arrays, cache: cacheRef.current, windMode, variable: rasterVariable }) : null),
-    [source, windMode, rasterVariable],
+    () => (source ? makeGetTileData({ arrays: source.arrays, cache: cacheRef.current, windMode, variable: rasterVariable, initTimeIdx }) : null),
+    [source, windMode, rasterVariable, initTimeIdx],
   );
   const renderTile = useCallback(
     (data: FfwiTileData) => {
@@ -263,6 +267,7 @@ export default function App() {
       out.push(
         ...aefLayers.layers({
           mode: fuel === "cover" ? "cover" : "lit",
+          zoom,
           teacher,
           leadTimeIdx,
           hideBelow,
@@ -278,7 +283,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     showRaster, source, getTileData, colormapTexture, initTimeIdx, windMode, rasterVariable, selection, renderTile, rasterOpacity,
-    leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity,
+    leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity, zoom,
   ]);
 
   const status: Status = {

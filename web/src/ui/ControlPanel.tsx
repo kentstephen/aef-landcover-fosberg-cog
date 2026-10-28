@@ -2,7 +2,6 @@ import { COLORMAP_INDEX } from "@developmentseed/deck.gl-raster/gpu-modules";
 import colormapsPngUrl from "@developmentseed/deck.gl-raster/gpu-modules/colormaps.png";
 import { useState } from "react";
 import type { Teacher } from "../aef/head.js";
-import { COG_MIN_ZOOM } from "../aef/sources.js";
 import { MOSAIC_MIN_ZOOM } from "../aef/mosaic.js";
 import { rampGradient } from "../aef/ramp.js";
 import type { WindMode } from "../ffwi/compute.js";
@@ -125,7 +124,7 @@ export function ControlPanel(p: ControlPanelProps) {
   const loading = loadingSummary(s);
   const rv = RASTER_VARIABLES[p.rasterVariable];
   const [min, setMin] = useState(false);
-  const reader = p.zoom >= MOSAIC_MIN_ZOOM ? "10 m mosaic" : p.zoom >= COG_MIN_ZOOM ? "COG overviews" : `zoom in to ${COG_MIN_ZOOM} for the land cover`;
+  const reader = p.zoom >= MOSAIC_MIN_ZOOM ? "10 m mosaic" : "COG overviews";
 
   const field = p.showRaster ? p.rasterVariable : "nothing";
   const fieldOptions = FIELD_OPTIONS.map((o) => (o.id === "wind" ? { ...o, label: windLabel(p.windMode).replace(/^wind: /, "wind ") } : o));
@@ -154,7 +153,7 @@ export function ControlPanel(p: ControlPanelProps) {
         The ground, read from <b>AlphaEarth embeddings</b> by a small land cover model, lit hour by hour by the{" "}
         <b>Fosberg Fire Weather Index</b> from NOAA's HRRR forecast. Open fuel (grass, shrub, pasture) carries the whole index,
         forest part of it, built-up ground and water none; where the weather is calm the ground is invisible, and it comes up
-        in viridis as the forecast worsens. Switch to the classes to check the model.
+        in viridis as the forecast worsens.
       </p>
       <p className="muted small" style={{ marginTop: 6 }}>
         Data: <A href="https://source.coop/tge-labs/aef">AlphaEarth Foundations 2025</A> (tge-labs on Source Cooperative) ·{" "}
@@ -186,7 +185,8 @@ export function ControlPanel(p: ControlPanelProps) {
             Every pixel's 64-band AlphaEarth embedding goes through a linear head (fit offline against the 2024 land cover maps,
             held-out accuracy 0.87 to 0.92 for Esri, 0.64 to 0.92 for NLCD) to a class. Lit: the hour's FFWI times the class's
             fuel weight, hidden below the hide line, viridis from there to the ramp top. Zoomed out the embeddings come from
-            the COG overviews (each overview pixel is the centroid of its children), zoomed in from the 10 m mosaic.
+            the COG overviews (each overview pixel is the centroid of its children; one byte range per file and
+            level, from an index built once), zoomed in from the 10 m mosaic.
           </Help>
         </div>
         <p className="muted small">Reading: {reader}{s.aefReading > 0 ? ` · ${s.aefReading} tiles in flight` : ""}</p>

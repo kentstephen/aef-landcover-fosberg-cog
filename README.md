@@ -8,10 +8,12 @@ viridis by the hour's fire weather and leaves calm areas transparent, so open
 fuels come up as the forecast worsens. The classified land cover and the raw
 weather field are each a toggle for checking.
 
-**Status: working first build.** The map opens on the Marshall Fire day
-(2021-12-30) over Boulder County. Zoomed out (zoom 9 to 12) the embeddings come
-from the AEF COG overviews, one file per 82 km UTM tile; zoomed in from the
-10 m Zarr mosaic. Every tile is classified once in a worker; the drawing is a
+**Status: working.** The map opens on the Marshall Fire day (2021-12-30) over
+Boulder County and works at every zoom. Zoomed out the embeddings come from the
+AEF COG overviews: one byte range per file and level (from an index built once
+by `scripts/build_aef_index.py`), decoded only as far as the level's rows,
+classified once per file, resampled onto Web Mercator tiles in a worker.
+Zoomed in (zoom 12+) they come from the 10 m Zarr mosaic. Drawing is a
 per-fragment lookup (class, fuel weight, the hour's FFWI). Fuel weights per
 class are a first cut (`web/src/aef/fuel.ts`). See `CLAUDE.md`.
 
@@ -32,7 +34,7 @@ every zoomed-out level.
 
 ```sh
 cd web && npm install && npm run dev   # http://localhost:3000 (PORT=... to change)
-uv run --with duckdb scripts/build_aef_index.py   # web/public/aef-2025-conus.json (the COG tile index)
+uv run --with duckdb --with tifffile --with fsspec --with aiohttp --with requests scripts/build_aef_index.py   # the COG index + byte ranges
 npm run build                          # -> web/dist
 npm run typecheck
 ```

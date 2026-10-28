@@ -32,25 +32,32 @@ weights; static site.
 Order of work: Python first (the model, checked by looking at its land cover
 maps), then the TypeScript map.
 
-## Status (2026-10-28, map built)
+## Status (2026-10-28, map built, reader rebuilt)
 
-- `web/` draws the ground lit by the hour's FFWI (`src/aef/`): the COG
-  overviews zoomed out (zoom 9 to 12, `MosaicLayer` of per-file `COGLayer`s,
-  overviews narrower than 128 px hidden because their tile corners fall where
-  proj4 returns null), the 10 m Zarr mosaic zoomed in (`ZarrLayer`, zoom 12+).
-  Tiles are classified in a worker pool (`aef.worker.ts`, the folded heads in
-  `head.ts`); the shader (`render.ts`) looks up class color and fuel weight in
-  a small texture and the FFWI in a per-tile weather texture (49 leads,
-  bilinear over the HRRR pixels, `weather.ts`). Modes: lit by FFWI, land cover,
-  off; teachers NLCD and Esri. Opens on the Marshall Fire (2021-12-30 12Z run,
-  +6 h) over Boulder County; URL hash holds the view.
-- The HRRR FFWI field is still available as its own layer ("The weather"
-  fold); the old county, burn probability, lines and Meta canopy layers are gone.
-- `web/public/aef-2025-conus.json` is the COG index (1982 tiles), from
-  `scripts/build_aef_index.py`.
+- `web/src/aef/` draws the ground lit by the hour's FFWI. Two readers, one head, one shader:
+  - zoomed out (below zoom 12): a Web Mercator `RasterTileLayer` (`layers.ts`, affine tileset
+    of XYZ levels) whose tiles come from `coarse.worker.ts`: per COG under the tile, the chosen
+    overview level is ONE byte range (from the index), each band's zstd block decoded only as far
+    as the rows the level uses, classified once per file and level (class planes kept, LRU
+    256 MB per worker, embeddings dropped), resampled onto the tile by nearest pixel through
+    UTM. Workers are assigned by longitude band so a file is decoded once. Measured over
+    CONUS at zoom 4.3: cold 76 s (2153 range requests, 80 MB), warm 16 s (disk cache).
+  - zoomed in (zoom 12+): the 10 m Zarr mosaic (`ZarrLayer`, `aef.worker.ts`).
+  - `render.ts` shader: class -> color and fuel weight from a lookup texture, FFWI from a
+    per-tile weather texture (49 leads, bilinear over HRRR pixels, `weather.ts`).
+- Index: `scripts/build_aef_index.py` (DuckDB + tifffile, 8 threads, about 2 min) writes
+  `web/public/aef-2025-conus.json` (1982 files, bounds, UTM origin) and one
+  `aef-2025-ranges-<zone>.bin` per UTM zone (per file: the span of each coarse level, widths
+  1024 to 16 px, and each band's block offset and length inside it; sparse blocks are 0, 0).
+- HRRR shards (the Fosberg inputs) are kept on disk too (`hrrr/shard-disk.ts`), so a run looked
+  at again does not refetch 440 MB.
+- Panel: "Lit by FFWI" and "Off" only; the land cover classes mode and legend are commented out
+  in `ControlPanel.tsx`. The HRRR field stays as "The weather" fold. Opens on the Marshall Fire
+  (2021-12-30 12Z run, +6 h); the URL hash holds the view.
 - Fuel weights per class (`web/src/aef/fuel.ts`) are a first cut, not tuned.
-- Headless checks: `.claude/memory/probe_tiles.py` (tiles, histogram,
-  tooltip, screenshots in both modes), `probe_map.py`, `probe_deck.py`.
+- Headless checks in `.claude/memory/`: `probe_tiles.py` (tiles, histograms, tooltip,
+  screenshot), `probe_map.py` (requests by host, console), `probe_warm.py` (persistent profile,
+  times "all tiles"), `probe_deck.py` (deck layer state).
 
 ## Model
 
@@ -86,7 +93,7 @@ maps), then the TypeScript map.
 ```sh
 cd web && npm install && PORT=5372 npm run dev   # 5371 and 3000 are taken on this machine
 npm run build && npm run typecheck
-uv run --with duckdb scripts/build_aef_index.py   # the COG tile index for the browser
+uv run --with duckdb --with tifffile --with fsspec --with aiohttp --with requests scripts/build_aef_index.py   # the COG index + byte ranges
 
 uv run scripts/sample_landcover.py              # data/tiles/<site>.npz, one tile at a time
 uv run scripts/fit_landcover_head.py            # models/*.json, data/previews/*.png
