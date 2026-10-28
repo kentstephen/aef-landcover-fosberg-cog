@@ -7,15 +7,17 @@
 (mosaic chunk, year): 64 bands x 256 x 256 int8, about 5 MB over the wire, 4 MB in RAM; the shard
 index is a small range read first. For each point in the chunk: the 10 m pixel (64 int8, as stored)
 and the unit-normalized mean of the 15 x 15 window (150 m) around it. Parts written per chunk to
-data/ignition/emb_parts/, resumable. Peak RAM well under 1 GB.
+data/ignition/emb_parts/, resumable. Reads run 8 at a time (the S3 host, not the gateway, takes
+parallel requests); 8 chunks in flight is 40 MB, peak RAM well under 1 GB.
 
-    uv run ignition/sample_embeddings.py [--limit N] [--tag wide] [--back 1]
+    uv run ignition/sample_embeddings.py [--limit N] [--tag wide] [--back 1] [--workers 8]
     --tag reads cases_<tag>.parquet; --back N reads the embedding N more years before emb_year
     (the trajectory), parts and output get the suffix _b<N>.
 """
 import argparse
 import sys
 import time
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +45,7 @@ def main():
     ap.add_argument("--limit", type=int, default=0)
     ap.add_argument("--tag", default="")
     ap.add_argument("--back", type=int, default=0)
+    ap.add_argument("--workers", type=int, default=8)
     a = ap.parse_args()
     global CASES, PARTS, OUT
     suffix = (f"_{a.tag}" if a.tag else "") + (f"_b{a.back}" if a.back else "")
@@ -64,32 +67,37 @@ def main():
     print("mosaic", arr.shape, arr.dtype, "chunks", arr.chunks, "shards", arr.shards)
     t0 = time.time()
     nbytes = 0
-    for n, k in enumerate(keys):
+
+    def fetch(k):
         rows = pts[pts.pkey == k]
         cx0 = int(rows.mx.iloc[0] // CHUNK) * CHUNK
         cy0 = int(rows.my.iloc[0] // CHUNK) * CHUNK
         ti = int(rows.yr.iloc[0]) - YEAR0
         t1 = time.time()
         block = arr[ti, :, cy0:cy0 + CHUNK, cx0:cx0 + CHUNK]  # (64, 256, 256) int8
-        nbytes += block.nbytes
-        out = []
-        for i, r in rows.iterrows():
-            x, y = int(r.mx - cx0), int(r.my - cy0)
-            pix = block[:, y, x]
-            y0, y1, x0, x1 = max(0, y - WIN), min(CHUNK, y + WIN + 1), max(0, x - WIN), min(CHUNK, x + WIN + 1)
-            win = block[:, y0:y1, x0:x1].reshape(64, -1)
-            ok = ~(win == -128).all(axis=0)
-            if ok.any():
-                m = dequant(win[:, ok]).mean(axis=1)
-                nrm = float(np.linalg.norm(m))
-                mean = (m / nrm) if nrm > 0 else m
-            else:
-                nrm, mean = float("nan"), np.full(64, np.nan, np.float32)
-            out.append(dict(row=int(i), nodata=bool((pix == -128).all()), win_norm=nrm,
-                            pix=pix.tobytes(), win_mean=mean.astype(np.float32).tobytes()))
-        pd.DataFrame(out).to_parquet(PARTS / f"{k}.parquet", index=False)
-        el = time.time() - t0
-        print(f"\r{n + 1}/{len(keys)} chunk {k} pts {len(rows)} read {time.time() - t1:.1f} s, {el / (n + 1):.1f} s/chunk, {nbytes / 1e9:.1f} GB, eta {el / (n + 1) * (len(keys) - n - 1) / 60:.0f} min", end="", flush=True)
+        return k, rows, cx0, cy0, block, time.time() - t1
+
+    with ThreadPoolExecutor(max_workers=a.workers) as ex:
+        for n, (k, rows, cx0, cy0, block, dt) in enumerate(ex.map(fetch, keys)):
+            nbytes += block.nbytes
+            out = []
+            for i, r in rows.iterrows():
+                x, y = int(r.mx - cx0), int(r.my - cy0)
+                pix = block[:, y, x]
+                y0, y1, x0, x1 = max(0, y - WIN), min(CHUNK, y + WIN + 1), max(0, x - WIN), min(CHUNK, x + WIN + 1)
+                win = block[:, y0:y1, x0:x1].reshape(64, -1)
+                ok = ~(win == -128).all(axis=0)
+                if ok.any():
+                    m = dequant(win[:, ok]).mean(axis=1)
+                    nrm = float(np.linalg.norm(m))
+                    mean = (m / nrm) if nrm > 0 else m
+                else:
+                    nrm, mean = float("nan"), np.full(64, np.nan, np.float32)
+                out.append(dict(row=int(i), nodata=bool((pix == -128).all()), win_norm=nrm,
+                                pix=pix.tobytes(), win_mean=mean.astype(np.float32).tobytes()))
+            pd.DataFrame(out).to_parquet(PARTS / f"{k}.parquet", index=False)
+            el = time.time() - t0
+            print(f"\r{n + 1}/{len(keys)} chunk {k} pts {len(rows)} read {dt:.1f} s, {el / (n + 1):.2f} s/chunk, {nbytes / 1e9:.1f} GB, eta {el / (n + 1) * (len(keys) - n - 1) / 60:.0f} min", end="", flush=True)
     print()
     parts = [pd.read_parquet(p) for p in PARTS.glob("*.parquet")]
     alle = pd.concat(parts).set_index("row").sort_index()

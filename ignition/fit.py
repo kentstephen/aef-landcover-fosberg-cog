@@ -149,8 +149,10 @@ def table(d, sets, ctrls, title):
             dd = d[d.kind.isin(["case", ctrl])].dropna(subset=cols)
             X = np.nan_to_num(dd[cols].to_numpy(np.float64))
             y = (dd.kind == "case").to_numpy(int)
+            if y.sum() < 50 or (1 - y).sum() < 50:  # a control not sampled for these features
+                row.append(float("nan")); continue
             row.append(auc_cv(X, y, dd.sq.to_numpy(), gb=name.startswith("GB")))
-        print(f"{name:9s} " + " ".join(f"{v:9.3f}" for v in row))
+        print(f"{name:9s} " + " ".join(f"{'-':>9s}" if np.isnan(v) else f"{v:9.3f}" for v in row))
 
 
 def main():
