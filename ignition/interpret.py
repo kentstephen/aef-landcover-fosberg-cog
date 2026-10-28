@@ -8,10 +8,13 @@
    2.5 km away? That is the part of the ground signal NLCD cannot carry. Out-of-fold ground head
    (E, case vs s_ctrl), AUC per NLCD class of the point, with counts.
 2. The ground head's out-of-fold score by NLCD class: what it lights.
-3. Size: among cases, is final size above the 90th percentile readable from W, E, N (AUC, GroupKFold)?
+3. Size: among cases, is the size (WFIGS IncidentSize; FinalAcres is set for only 12% of fires) above the
+   90th percentile, or at least 100 acres, readable from W, E, N (AUC, GroupKFold)?
 
-    uv run ignition/interpret.py
+    uv run ignition/interpret.py                       # the pilot set, 2.5 km control
+    uv run ignition/interpret.py --tag big --ctrl s30  # the big set, the 20 to 30 km ring
 """
+import argparse
 import sys
 import warnings
 from pathlib import Path
@@ -41,17 +44,23 @@ def oof(X, y, groups):
 
 
 def main():
-    c = load_set()
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--tag", default="")
+    ap.add_argument("--ctrl", default="s", help="spatial control ring: s (2.5 km), s10, s30")
+    ap.add_argument("--size-col", default="size", help="size (IncidentSize) or final_acres")
+    args = ap.parse_args()
+    ctrl = f"{args.ctrl}_ctrl"
+    c = load_set(args.tag)
     for cl in CLASSES:
         c[f"nlcd_is{cl}"] = (c.nlcd == cl).astype(float)
     c["sq"] = c.cy * 100 + c.cx
     for cause in ["all", "Natural", "Human"]:
         d = c if cause == "all" else c[c.cause == cause]
-        d = d[d.kind.isin(["case", "s_ctrl"])].copy()
+        d = d[d.kind.isin(["case", ctrl])].copy()
         X = np.nan_to_num(d[FEATS["E"]].to_numpy(np.float64))
         y = (d.kind == "case").to_numpy(int)
         d["g"] = oof(X, y, d.sq.to_numpy())
-        print(f"\n== {cause}: ground head (E, case vs s_ctrl), overall AUC {roc_auc_score(y, d.g):.3f} ==")
+        print(f"\n== {cause}: ground head (E, case vs {ctrl}), overall AUC {roc_auc_score(y, d.g):.3f} ==")
         print(f"{'NLCD class':12s} {'n case':>7s} {'n ctrl':>7s} {'AUC within':>11s} {'mean score':>11s}")
         for cl, g in d.groupby("nlcd"):
             yy = (g.kind == "case").to_numpy(int)
@@ -61,20 +70,24 @@ def main():
         d["g_res"] = d.g - d.groupby("nlcd").g.transform("mean")
         print(f"pooled within-class AUC (score minus the class mean): {roc_auc_score(y, d.g_res):.3f}")
 
-    print("\n== size: final acres above the 90th percentile among cases, AUC held out by HRRR square ==")
+    sz = args.size_col
     cs = c[c.kind == "case"].copy()
-    cs = cs[cs.final_acres.notna() & (cs.final_acres > 0)]
-    for cause in ["all", "Natural", "Human"]:
-        d = cs if cause == "all" else cs[cs.cause == cause]
-        thr = d.final_acres.quantile(0.9)
-        y = (d.final_acres >= thr).to_numpy(int)
-        out = []
-        for name in ["W", "E", "N", "E+W", "N+W", "E+N+W"]:
-            cols = sum((FEATS[p] for p in name.split("+")), [])
-            X = np.nan_to_num(d[cols].to_numpy(np.float64))
-            out.append(f"{name} {roc_auc_score(y, oof(X, y, d.sq.to_numpy())):.3f}")
-        print(f"{cause:8s} n {len(d)}, threshold {thr:.0f} acres: " + ", ".join(out))
-
+    cs = cs[cs[sz].notna() & (cs[sz] > 0)]
+    for label, thr_of in [("above the 90th percentile", lambda d: d[sz].quantile(0.9)), ("at least 100 acres", lambda d: 100.0)]:
+        print(f"\n== size: {sz} {label} among cases, AUC held out by HRRR square ==")
+        for cause in ["all", "Natural", "Human"]:
+            d = cs if cause == "all" else cs[cs.cause == cause]
+            thr = thr_of(d)
+            y = (d[sz] >= thr).to_numpy(int)
+            if y.sum() < 20 or y.sum() > len(y) - 20:
+                print(f"{cause:8s} n {len(d)}, {y.sum()} positives: too few")
+                continue
+            out = []
+            for name in ["W", "E", "N", "E+W", "N+W", "E+N+W"]:
+                cols = sum((FEATS[p] for p in name.split("+")), [])
+                X = np.nan_to_num(d[cols].to_numpy(np.float64))
+                out.append(f"{name} {roc_auc_score(y, oof(X, y, d.sq.to_numpy())):.3f}")
+            print(f"{cause:8s} n {len(d)}, {y.sum()} positives, threshold {thr:.0f} acres: " + ", ".join(out))
 
 if __name__ == "__main__":
     sys.exit(main())
