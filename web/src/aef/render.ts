@@ -134,7 +134,13 @@ float fuelHash(vec2 p) {
           a *= smoothstep(h - 0.08, h + 0.08, 0.1 + 0.9 * t);
           if (a < 0.01) discard;
         }
-        color = vec4(texture(rampTex, vec2(t, 0.5)).rgb, a);
+        vec3 rgb = texture(rampTex, vec2(t, 0.5)).rgb;
+        if (standing) {
+          // the standing picture in gray (the ramp's luminance), color only where the hour lifts the pixel
+          float lum = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+          rgb = mix(vec3(lum), rgb, lit);
+        }
+        color = vec4(rgb, a);
       } else if (${MODULE_NAME}.mode > 0.5) {
         color = vec4(lut.rgb, 1.0);
       } else {
