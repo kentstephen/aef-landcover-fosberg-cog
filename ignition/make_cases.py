@@ -10,11 +10,14 @@ controls, which together split "where" from "when":
   t_ctrl  same point, another hour in the same 90-day weather block (not within a day of the fire)
   s_ctrl  another point in the same 2.5 km embedding chunk (at least 300 m away), the fire's hour
   r_ctrl  that other point, at the t_ctrl hour
-The pilot takes its cases by weather chunk (a 135 km square and a 90-day block), so the HRRR reads
-stay few: NGROUPS squares drawn with probability ~ sqrt(fires in the square), up to PER_GROUP cases
-each, half Natural and half Human as far as the square allows. Nothing heavy: a DataFrame.
+Cases are taken by weather chunk (a 135 km square and a 90-day block), so the HRRR reads stay few:
+NGROUPS squares drawn with probability ~ sqrt(fires in the square), up to PER_GROUP cases each, a
+NAT_FRAC share Natural as far as the square allows, the rest Human. With --rings the wider spatial
+controls (s10/r10 at 5 to 10 km, s30/r30 at 20 to 30 km, see make_controls_wide.py) go in the same
+file. Nothing heavy: a DataFrame.
 
-    uv run ignition/make_cases.py [--ngroups 400] [--per-group 12] [--seed 1]
+    uv run ignition/make_cases.py [--ngroups 400] [--per-group 12] [--seed 1]            # the pilot
+    uv run ignition/make_cases.py --tag big --ngroups 1500 --per-group 14 --nat-frac 0.4 --rings --seed 3
 """
 import argparse
 import sys
@@ -47,19 +50,72 @@ def mosaic_pixels(lon, lat):
     return np.floor((lon - MOS_X0) / MOS_RES).astype(np.int64), np.floor((MOS_Y0 - lat) / MOS_RES).astype(np.int64)
 
 
+def offset(lon, lat, dist_m, bearing):
+    """Move a point dist_m along a bearing (radians) on a sphere."""
+    r = 6_371_000.0
+    la1, lo1 = np.radians(lat), np.radians(lon)
+    d = dist_m / r
+    la2 = np.arcsin(np.sin(la1) * np.cos(d) + np.cos(la1) * np.sin(d) * np.cos(bearing))
+    lo2 = lo1 + np.arctan2(np.sin(bearing) * np.sin(d) * np.cos(la1), np.cos(d) - np.sin(la1) * np.sin(la2))
+    return np.degrees(lo2), np.degrees(la2)
+
+
+RINGS = {"10": (5_000, 10_000), "30": (20_000, 30_000)}
+
+
+def ring_rows(out, rng):
+    """s10/r10 and s30/r30 rows for the cases in out (case and t_ctrl rows present)."""
+    cases = out[out.kind == "case"].set_index("case_id")
+    t2 = out[out.kind == "t_ctrl"].set_index("case_id").ti
+    keep = ["case_id", "cause", "size", "final_acres", "name", "fuel", "state", "year", "emb_year"]
+    rows = []
+    for ring, (lo, hi) in RINGS.items():
+        n = len(cases)
+        dist = np.sqrt(rng.uniform(lo * lo, hi * hi, n))  # uniform over the annulus area
+        brg = rng.uniform(0, 2 * np.pi, n)
+        lon2, lat2 = offset(cases.lon.values, cases.lat.values, dist, brg)
+        base = cases.reset_index()[keep]
+        for kind, ti in [(f"s{ring}_ctrl", cases.ti.values), (f"r{ring}_ctrl", t2.loc[cases.index].values)]:
+            b = base.copy()
+            b["kind"], b["lon"], b["lat"], b["ti"] = kind, lon2, lat2, ti.astype(int)
+            b["dist_m"] = dist
+            rows.append(b)
+    return pd.concat(rows, ignore_index=True)
+
+
+def finish(out):
+    """Grid indices for every row: HRRR pixel and weather group, mosaic pixel and chunk."""
+    out = out.copy()
+    out["time"] = T0 + pd.to_timedelta(out.ti, unit="h")
+    hx, hy = hrrr_pixels(out.lon.values, out.lat.values)
+    out["hx"], out["hy"] = hx, hy
+    inside = (hx >= 0) & (hx < W) & (hy >= 0) & (hy < H)
+    out = out[inside].copy()
+    out["cx"], out["cy"], out["ct"] = out.hx // CHUNK_XY, out.hy // CHUNK_XY, out.ti // CHUNK_T
+    out["group"] = out.ct * 100000 + out.cy * 100 + out.cx
+    mx, my = mosaic_pixels(out.lon.values, out.lat.values)
+    out["mx"], out["my"] = mx, my
+    out["mchunk"] = (my // MOS_CHUNK) * 100000 + (mx // MOS_CHUNK)
+    return out, int((~inside).sum())
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ngroups", type=int, default=400)
     ap.add_argument("--per-group", type=int, default=12)
     ap.add_argument("--seed", type=int, default=1)
+    ap.add_argument("--nat-frac", type=float, default=0.5, help="share of each group's cases that is Natural, where the square allows")
+    ap.add_argument("--rings", action="store_true", help="also the 5 to 10 km and 20 to 30 km controls")
+    ap.add_argument("--tag", default="", help="write cases_<tag>.parquet")
     a = ap.parse_args()
     rng = np.random.default_rng(a.seed)
+    out_path = OUT.with_name(f"cases_{a.tag}.parquet") if a.tag else OUT
 
     df = pd.read_parquet(IN)
     df = df[df.FireCause.isin(["Natural", "Human"])].copy()
     df["time"] = df.FireDiscoveryDateTime.dt.floor("h")
     df["year"] = df.time.dt.year
-    df = df[(df.year >= 2019) & (df.year <= 2025)]
+    df = df[(df.year >= 2019) & (df.year <= 2026)]  # the embedding of the year before: 2018 to 2025
     df = df.rename(columns={"geom_lon": "lon", "geom_lat": "lat"})
     hx, hy = hrrr_pixels(df.lon.values, df.lat.values)
     df["hx"], df["hy"] = hx, hy
@@ -76,10 +132,10 @@ def main():
     picks = []
     for g in groups:
         sub = df[df.group == g]
-        half = a.per_group // 2
+        want_nat = int(round(a.per_group * a.nat_frac))
         nat = sub[sub.FireCause == "Natural"]
         hum = sub[sub.FireCause == "Human"]
-        n_nat = min(len(nat), half + max(0, half - len(hum)))
+        n_nat = min(len(nat), want_nat + max(0, (a.per_group - want_nat) - len(hum)))
         n_hum = min(len(hum), a.per_group - n_nat)
         if n_nat: picks.append(nat.sample(n_nat, random_state=int(rng.integers(1 << 31))))
         if n_hum: picks.append(hum.sample(n_hum, random_state=int(rng.integers(1 << 31))))
@@ -110,22 +166,16 @@ def main():
         rows.append({**base, "kind": "s_ctrl", "lon": lon2, "lat": lat2, "ti": int(c.ti)})
         rows.append({**base, "kind": "r_ctrl", "lon": lon2, "lat": lat2, "ti": t2})
     out = pd.DataFrame(rows)
-    out["time"] = T0 + pd.to_timedelta(out.ti, unit="h")
-    hx, hy = hrrr_pixels(out.lon.values, out.lat.values)
-    out["hx"], out["hy"] = hx, hy
-    out["cx"], out["cy"], out["ct"] = hx // CHUNK_XY, hy // CHUNK_XY, out.ti // CHUNK_T
-    out["group"] = out.ct * 100000 + out.cy * 100 + out.cx
-    mx, my = mosaic_pixels(out.lon.values, out.lat.values)
-    out["mx"], out["my"] = mx, my
-    out["mchunk"] = (my // MOS_CHUNK) * 100000 + (mx // MOS_CHUNK)
-    # the point and its control share a chunk by construction; if the square edge made the HRRR group
-    # differ (a control just over a chunk line) that only means one more weather group
+    if a.rings:
+        out = pd.concat([out, ring_rows(out, rng)], ignore_index=True)
+    out, dropped = finish(out)
+    if dropped: print(f"{dropped} ring points off the HRRR grid dropped")
     print(f"rows {len(out)}: weather groups {out.group.nunique()}, mosaic chunks {out.mchunk.nunique()} (x ~5 MB), point rows {len(out) // 2}")
     print(out.kind.value_counts().to_string())
     print(out.groupby('cause').year.value_counts().unstack(fill_value=0).to_string())
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    out.to_parquet(OUT, index=False)
-    print("wrote", OUT)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out.to_parquet(out_path, index=False)
+    print("wrote", out_path)
 
 
 if __name__ == "__main__":
