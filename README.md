@@ -8,9 +8,12 @@ viridis by the hour's fire weather and leaves calm areas transparent, so open
 fuels come up as the forecast worsens. The classified land cover and the raw
 weather field are each a toggle for checking.
 
-**Status: work in progress.** The model and its training scripts exist; the
-web app is the earlier HRRR Fosberg map with a new plain panel, and the AEF
-layers are not wired in yet. See `CLAUDE.md`.
+**Status: working first build.** The map opens on the Marshall Fire day
+(2021-12-30) over Boulder County. Zoomed out (zoom 9 to 12) the embeddings come
+from the AEF COG overviews, one file per 82 km UTM tile; zoomed in from the
+10 m Zarr mosaic. Every tile is classified once in a worker; the drawing is a
+per-fragment lookup (class, fuel weight, the hour's FFWI). Fuel weights per
+class are a first cut (`web/src/aef/fuel.ts`). See `CLAUDE.md`.
 
 *Claude wrote the code and documentation under my supervision.*
 
@@ -29,6 +32,7 @@ every zoomed-out level.
 
 ```sh
 cd web && npm install && npm run dev   # http://localhost:3000 (PORT=... to change)
+uv run --with duckdb scripts/build_aef_index.py   # web/public/aef-2025-conus.json (the COG tile index)
 npm run build                          # -> web/dist
 npm run typecheck
 ```

@@ -100,7 +100,16 @@ export function lonLatToHrrrPixel(
   return { x: col, y: row };
 }
 
-/** Lon/lat of the centre of HRRR pixel (col, row). */
+/** Fractional HRRR pixel coordinates for a lon/lat (pixel centers at .5), or null outside the grid. */
+export function lonLatToHrrrPixelF(lon: number, lat: number): { x: number; y: number } | null {
+  const [px, py] = lccForward([lon, lat]);
+  const x = (px - HRRR_GRID.x0) / HRRR_GRID.dx;
+  const y = (py - HRRR_GRID.y0) / HRRR_GRID.dy;
+  if (!(x >= 0 && x < HRRR_GRID.width && y >= 0 && y < HRRR_GRID.height)) return null;
+  return { x, y };
+}
+
+/** Lon/lat of the center of HRRR pixel (col, row). */
 export function hrrrPixelToLonLat(col: number, row: number): [number, number] {
   const x = HRRR_GRID.x0 + (col + 0.5) * HRRR_GRID.dx;
   const y = HRRR_GRID.y0 + (row + 0.5) * HRRR_GRID.dy;

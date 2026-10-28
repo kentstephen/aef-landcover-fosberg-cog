@@ -10,41 +10,36 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MapRef } from "react-map-gl/maplibre";
 import { Map as MaplibreMap } from "react-map-gl/maplibre";
 import type * as zarr from "zarrita";
-import { buildCountyLayer } from "./counties/layer.js";
-import { countyFrame, countyPeak, countyPotentialMean, loadCounties, type CountySet } from "./counties/load.js";
+import { fuelOf } from "./aef/fuel.js";
+import { HEADS, NO_CLASS, type Teacher } from "./aef/head.js";
+import { AefLayers } from "./aef/layers.js";
+import { type AefArray, openAefMosaic } from "./aef/mosaic.js";
+import { AefPool } from "./aef/pool.js";
+import { type AefSource, loadAefIndex } from "./aef/sources.js";
 import type { WindMode } from "./ffwi/compute.js";
 import { makeGetTileData, type FfwiTileData } from "./hrrr/get-tile-data.js";
-import { dateFromInitTimeIdx, HRRR_GEOZARR_ATTRS, HRRR_LEAD_TIME_COUNT, lonLatToHrrrPixel } from "./hrrr/metadata.js";
+import { dateFromInitTimeIdx, HRRR_GEOZARR_ATTRS, HRRR_LEAD_TIME_COUNT, initTimeIdxFromDate, lonLatToHrrrPixel } from "./hrrr/metadata.js";
 import { makeRenderTile } from "./hrrr/render-tile.js";
 import { buildSelection } from "./hrrr/selection.js";
 import { SideChannel } from "./hrrr/side-channel.js";
 import { openHrrr, type HrrrSource } from "./hrrr/store.js";
 import { FfwiTileCache } from "./hrrr/tile-cache.js";
 import { RASTER_VARIABLES, type RasterVariable } from "./hrrr/variables.js";
-import { buildLineLayer, lineFfwiAt, lineRun, milesAbove } from "./lines/layer.js";
-import { buildCanopyLayer, loadCanopyGeoTIFF } from "./canopy/layer.js";
-import type { GeoTIFF } from "@developmentseed/geotiff";
-import { KM_TO_MI, loadLines, VOLT_CLASS_LABEL, type LineSet } from "./lines/load.js";
 import { DeckGlOverlay } from "./lib/deckgl-overlay.js";
-import {
-  fetchPotential,
-  lonLatToMercator,
-  POTENTIAL_LAYERS,
-  samplePotential,
-  type PotentialLayerId,
-  type PotentialRaster,
-} from "./potential/service.js";
-import { ControlPanel, loadingSummary, type ColormapChoiceId, type CountyField, type CountyStat, type LineHeadline, type PeakMode, type Status, type ViewMode } from "./ui/ControlPanel.js";
+import { ControlPanel, loadingSummary, type ColormapChoiceId, type FuelChoice, type Status } from "./ui/ControlPanel.js";
 
 const MAP_STYLE_URL = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 /** First basemap layer above water in CARTO styles; data goes under roads/labels. */
 const BEFORE_ID = "aeroway-runway";
 const INITIAL_FRAME_MS = 300;
-/** One CONUS-wide export of the potential raster, sampled per county once. */
-const CONUS_MERC: [number, number, number, number] = [
-  ...lonLatToMercator(-125.5, 24.0),
-  ...lonLatToMercator(-66.0, 49.8),
-] as [number, number, number, number];
+/**
+ * Opens on the Marshall Fire: 2021-12-30, downslope winds over cured grass at the Boulder County
+ * foothills, Denver's built ground beside it. The 12Z run, +6 h = late morning local, when the
+ * wind peaked. A past day with contrast between open fuel, forest and city.
+ */
+const START_VIEW = { longitude: -105.14, latitude: 39.94, zoom: 10.3 };
+const START_INIT = new Date("2021-12-30T12:00:00Z");
+const START_LEAD = 6;
 
 export default function App() {
   const mapRef = useRef<MapRef>(null);
@@ -69,11 +64,8 @@ export default function App() {
       .then((s) => {
         if (cancelled) return;
         setSource(s);
-        const latest = s.initTimeCount - 1;
-        setInitTimeIdx(latest);
-        // Open on now: the lead hour closest to the current time within the latest run.
-        const hours = Math.round((Date.now() - dateFromInitTimeIdx(latest).getTime()) / 3_600_000);
-        setLeadTimeIdx(Math.max(0, Math.min(HRRR_LEAD_TIME_COUNT - 1, hours)));
+        setInitTimeIdx(initTimeIdxFromDate(START_INIT, s.initTimeCount - 1));
+        setLeadTimeIdx(START_LEAD);
       })
       .catch((e) => setError(`HRRR store: ${String(e)}`));
     return () => {
@@ -81,32 +73,39 @@ export default function App() {
     };
   }, []);
 
-  // ---- the potential raster (once, CONUS-wide): county BP and the tooltip
-  const [potentialId, setPotentialId] = useState<PotentialLayerId>("bp");
-  const [potential, setPotential] = useState<PotentialRaster | null>(null);
-  const [potentialLoading, setPotentialLoading] = useState(false);
+  // ---- the embeddings: the tile index, the mosaic, the worker pool, the layer controller
+  const poolRef = useRef<AefPool | null>(null);
+  const [aefIndex, setAefIndex] = useState<AefSource[] | null>(null);
+  const [mosaic, setMosaic] = useState<{ arr: AefArray; attrs: unknown } | null>(null);
   useEffect(() => {
-    const ctrl = new AbortController();
-    setPotentialLoading(true);
-    fetchPotential(potentialId, CONUS_MERC, 1800, 1000, ctrl.signal)
-      .then((r) => {
-        if (!ctrl.signal.aborted) setPotential(r);
-      })
-      .catch((e) => {
-        if (!ctrl.signal.aborted) setError(`Potential layer: ${String(e)}`);
-      })
-      .finally(() => {
-        if (!ctrl.signal.aborted) setPotentialLoading(false);
-      });
-    return () => ctrl.abort();
-  }, [potentialId]);
-  useEffect(() => {
-    setPotentialNorm(potentialId === "bp" ? 0.02 : 5000);
-  }, [potentialId]);
+    let gone = false;
+    loadAefIndex()
+      .then((i) => { if (!gone) setAefIndex(i); })
+      .catch((e) => { if (!gone) setError(`AEF index: ${String(e)}`); });
+    openAefMosaic()
+      .then((m) => { if (!gone) setMosaic(m); })
+      .catch((e) => { if (!gone) setError(`AEF mosaic: ${String(e)}`); });
+    return () => { gone = true; };
+  }, []);
+  const [aefVersion, setAefVersion] = useState(0);
+  const needWeatherRef = useRef<(px: Int16Array, py: Int16Array) => void>(() => {});
+  const aefLayers = useMemo(() => {
+    if (!aefIndex || !mosaic) return null;
+    if (!poolRef.current) poolRef.current = new AefPool();
+    const l = new AefLayers(
+      poolRef.current,
+      cacheRef.current,
+      aefIndex,
+      mosaic,
+      (px, py) => needWeatherRef.current(px, py),
+      () => setAefVersion((v) => v + 1),
+    );
+    return l;
+  }, [aefIndex, mosaic]);
 
   // ---- animation
-  const [leadTimeIdx, setLeadTimeIdx] = useState(0);
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [leadTimeIdx, setLeadTimeIdx] = useState(START_LEAD);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [frameDurationMs, setFrameDurationMs] = useState(INITIAL_FRAME_MS);
   useEffect(() => {
     if (!isPlaying) return;
@@ -138,94 +137,26 @@ export default function App() {
   // ---- styling
   const [windMode, setWindMode] = useState<WindMode>("sustained");
   const [colormapId, setColormapId] = useState<ColormapChoiceId>("solar");
-  /** FFWI ramp top (the county view and the FFWI raster share it). */
+  /** Ramp top for the ground and the field. */
   const [rescaleMax, setRescaleMax] = useState(100);
-  /** FFWI below this is hidden on the raster and is the county "share" threshold. */
+  /** Below this nothing is drawn (ground or field). */
   const [hideBelow, setHideBelow] = useState(20);
-  // The lines are the subject; the field under them (counties or raster) is off until asked for.
   const [showRaster, setShowRaster] = useState(false);
-  const [showCounties, setShowCounties] = useState(false);
   const [rasterOpacity, setRasterOpacity] = useState(0.7);
-  /** County BP ramp top (display units). */
-  const [potentialNorm, setPotentialNorm] = useState(0.02);
-  /** Fuel-moisture timelag in hours; 0 = Fosberg as published. Applied in the cache (counties, tooltip) and the shader (raster). */
+  const [rasterVariable, setRasterVariable] = useState<RasterVariable>("ffwi");
+  const varDef = RASTER_VARIABLES[rasterVariable];
+  useEffect(() => {
+    setColormapId(varDef.defaultColormap);
+  }, [varDef]);
+  /** Fuel-moisture timelag in hours; 0 = Fosberg as published. */
   const [tauHours, setTauHours] = useState(0);
   useEffect(() => {
     cacheRef.current.setTau(tauHours);
   }, [tauHours]);
-  /** Trailing window for the county "hours above the line" stat. */
-  const [windowHours, setWindowHours] = useState(12);
-  /** county (default) = one FFWI number per county; raster = the 3 km field of FFWI or one of its inputs. */
-  const [viewMode, setViewMode] = useState<ViewMode>("county");
-  const [rasterVariable, setRasterVariable] = useState<RasterVariable>("ffwi");
-  const countyView = viewMode === "county";
-  const varDef = RASTER_VARIABLES[rasterVariable];
-
-  // ---- county view
-  const [countyField, setCountyField] = useState<CountyField>("ffwi");
-  const [countyStat, setCountyStat] = useState<CountyStat>("share");
-  const [peakMode, setPeakMode] = useState<PeakMode>("peak");
-  // Each raster variable brings its own colormap (temperature: cool-warm); the county view is solar,
-  // except the peak-hour map, which is a time axis and gets viridis.
-  useEffect(() => {
-    setColormapId(countyView ? (countyField === "peak" ? "viridis" : "solar") : varDef.defaultColormap);
-  }, [countyView, countyField, varDef]);
-  const [counties, setCounties] = useState<CountySet | null>(null);
-  useEffect(() => {
-    if (!countyView || counties) return;
-    const ctrl = new AbortController();
-    loadCounties(ctrl.signal)
-      .then((c) => {
-        if (!ctrl.signal.aborted) setCounties(c);
-      })
-      .catch((e) => {
-        if (!ctrl.signal.aborted) setError(`Counties: ${String(e)}`);
-      });
-    return () => ctrl.abort();
-  }, [countyView, counties]);
-  const countyBp = useMemo(() => (counties && potential ? countyPotentialMean(counties, potential) : null), [counties, potential]);
-  /** Shards that hold at least one county pixel (21 of the grid's 24: the rest are open water or outside the US). */
-  const countyShardKeys = useMemo(() => {
-    if (!counties) return null;
-    const keys = new Set<string>();
-    for (let j = 0; j < counties.pxX.length; j++) keys.add(FfwiTileCache.keyFor(counties.pxX[j]!, counties.pxY[j]!));
-    return [...keys];
-  }, [counties]);
-  const [countyHover, setCountyHover] = useState<{ i: number; x: number; y: number } | null>(null);
-
-  // ---- transmission lines (HIFLD, preprocessed to lines.bin): the subject; the weather lights them.
-  const [showLines, setShowLines] = useState(true);
-  const [lineGhost, setLineGhost] = useState(0.18);
-  /** Width at the ramp top, px (1 px at the hide line). */
-  const [lineMaxWidth, setLineMaxWidth] = useState(3);
-  const [lines, setLines] = useState<LineSet | null>(null);
-  // ---- canopy height (Meta / WRI, source.coop overview COG): context under the lines, static.
-  const [showCanopy, setShowCanopy] = useState(true);
-  const [canopyOpacity, setCanopyOpacity] = useState(0.3);
-  const [canopyMinHeight, setCanopyMinHeight] = useState(3);
-  const [canopyMaxHeight, setCanopyMaxHeight] = useState(30);
-  const [canopy, setCanopy] = useState<GeoTIFF | null>(null);
-  useEffect(() => {
-    if (!showCanopy || canopy) return;
-    let gone = false;
-    loadCanopyGeoTIFF()
-      .then((g) => { if (!gone) setCanopy(g); })
-      .catch((e) => { if (!gone) setError(`Canopy: ${String(e)}`); });
-    return () => { gone = true; };
-  }, [showCanopy, canopy]);
-  const [lineHover, setLineHover] = useState<{ i: number; x: number; y: number } | null>(null);
-  useEffect(() => {
-    if (!showLines || lines) return;
-    const ctrl = new AbortController();
-    loadLines(ctrl.signal)
-      .then((l) => {
-        if (!ctrl.signal.aborted) setLines(l);
-      })
-      .catch((e) => {
-        if (!ctrl.signal.aborted) setError(`Lines: ${String(e)}`);
-      });
-    return () => ctrl.abort();
-  }, [showLines, lines]);
+  const [fuel, setFuel] = useState<FuelChoice>("lit");
+  const [teacher, setTeacher] = useState<Teacher>("nlcd");
+  const [fuelOpacity, setFuelOpacity] = useState(0.9);
+  const [zoom, setZoom] = useState(START_VIEW.zoom);
 
   const [device, setDevice] = useState<Device | null>(null);
   const [colormapImage, setColormapImage] = useState<ImageData | null>(null);
@@ -252,81 +183,38 @@ export default function App() {
     cacheRef.current.clear();
   }, [initTimeIdx, windMode]);
 
-  // In the county view nothing else fills the FFWI cache: the side channel
-  // fetches every shard the counties touch (all 24). It skips cached shards.
+  // The ground needs the forecast under every tile it holds, whether or not the field is drawn:
+  // a side channel fetches the shards the tiles ask for (it skips cached shards).
   useEffect(() => {
-    if (!countyView || !source || !counties) return;
+    if (!source) return;
     const sc = new SideChannel(source.arrays, cacheRef.current);
-    void sc.ensure(counties.pxX, counties.pxY, initTimeIdx, windMode);
-    return () => sc.abort();
-  }, [countyView, counties, source, initTimeIdx, windMode]);
-  // The lines need every shard they touch lit, in either view. In the raster view the ZarrLayer
-  // only fetches the viewport's tiles, so the side channel fills the rest (it skips cached shards;
-  // a short delay lets the raster tiles go first, as in road-risk).
-  useEffect(() => {
-    if (!showLines || !source || !lines) return;
-    const sc = new SideChannel(source.arrays, cacheRef.current);
-    const timer = setTimeout(() => void sc.ensure(lines.px, lines.py, initTimeIdx, windMode), countyView ? 0 : 1200);
+    needWeatherRef.current = (px, py) => void sc.ensure(px, py, initTimeIdx, windMode);
+    // tiles already on hand asked under an older run
+    if (aefLayers) for (const t of aefLayers.live.values()) void sc.ensure(t.grid.px, t.grid.py, initTimeIdx, windMode);
     return () => {
-      clearTimeout(timer);
+      needWeatherRef.current = () => {};
       sc.abort();
     };
-  }, [showLines, lines, source, initTimeIdx, windMode, countyView]);
-  // FFWI for every pixel the lines touch, all 49 leads, once per cache change (tau included);
-  // frames and the headline are lookups into it.
-  const lineRunData = useMemo(
-    () => (showLines && lines ? lineRun(lines, cacheRef.current) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [showLines, lines, cacheVersion],
-  );
-  const lineMiles = useMemo(
-    () => (lines && lineRunData ? milesAbove(lines, lineRunData, hideBelow) : null),
-    [lines, lineRunData, hideBelow],
-  );
-  const lineFfwiNow = useMemo(
-    () => (lines && lineRunData ? lineFfwiAt(lines, lineRunData, leadTimeIdx) : null),
-    [lines, lineRunData, leadTimeIdx],
-  );
-  const lineHeadline: LineHeadline | null = useMemo(() => {
-    if (!lines || !lineRunData || !lineMiles) return null;
-    let peakLead = 0;
-    for (let l = 1; l < lineMiles.length; l++) if (lineMiles[l]! > lineMiles[peakLead]!) peakLead = l;
-    return {
-      milesNow: lineMiles[leadTimeIdx]!,
-      milesTotal: lines.totalKm * KM_TO_MI,
-      milesLoaded: lineRunData.milesLoaded,
-      peakLead,
-      milesPeak: lineMiles[peakLead]!,
-    };
-  }, [lines, lineRunData, lineMiles, leadTimeIdx]);
+  }, [source, initTimeIdx, windMode, aefLayers]);
+  // The weather changed: every tile's weather texture anew.
+  useEffect(() => {
+    aefLayers?.refreshWeather();
+  }, [aefLayers, cacheVersion]);
 
-  // Whole-run pass per county (mean and share per lead, peak, onset) for the peak map and the decay
-  // stat; recomputed as shards arrive and when tau changes.
-  const needRun = countyView && showCounties && countyField === "peak";
-  const countyPeakData = useMemo(
-    () => (needRun && counties ? countyPeak(counties, cacheRef.current, hideBelow) : null),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [needRun, counties, hideBelow, cacheVersion],
-  );
-  const countyFrameData = useMemo(
-    () => (countyView && showCounties && counties ? countyFrame(counties, cacheRef.current, leadTimeIdx, hideBelow, windowHours) : null),
-    // cacheVersion: new shards arrive while the lead is unchanged, and setTau bumps it.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [countyView, showCounties, counties, leadTimeIdx, hideBelow, windowHours, cacheVersion],
-  );
-
-  // ---- hover (raster view): map mousemove -> HRRR pixel -> FFWI cache + BP export.
+  // ---- hover: lon/lat -> class under the cursor and FFWI at the HRRR pixel
   const [hover, setHover] = useState<{ lon: number; lat: number; x: number; y: number } | null>(null);
   const hoverInfo = useMemo(() => {
-    if (!hover || countyView) return null;
+    if (!hover) return null;
     const px = lonLatToHrrrPixel(hover.lon, hover.lat);
     const wx = px ? cacheRef.current.sample(px.x, px.y, leadTimeIdx) : null;
-    const bp = potential ? samplePotential(potential, hover.lon, hover.lat) : NaN;
+    const ground = aefLayers?.at(hover.lon, hover.lat) ?? null;
+    const ci = ground ? (teacher === "nlcd" ? ground.nlcd : ground.esri) : NO_CLASS;
+    const className = ci === NO_CLASS ? null : HEADS[teacher].names[ci]!;
+    const weight = ci === NO_CLASS ? 0 : fuelOf(teacher, ci);
     const ffwi = wx?.ffwi ?? NaN;
-    // Speak where the map is lit: FFWI above the hide line, or any loaded pixel for the other variables.
-    const lit = rasterVariable === "ffwi" ? Number.isFinite(ffwi) && ffwi >= hideBelow : wx !== null;
-    return { wx, bp, lit };
-  }, [hover, countyView, leadTimeIdx, cacheVersion, potential, rasterVariable, hideBelow]);
+    return { wx, ground, className, weight, lit: Number.isFinite(ffwi) ? ffwi * weight : NaN };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hover, leadTimeIdx, cacheVersion, aefLayers, aefVersion, teacher]);
 
   // ---- layers
   const selection = useMemo(() => buildSelection(initTimeIdx), [initTimeIdx]);
@@ -351,38 +239,10 @@ export default function App() {
     },
     [leadTimeIdx, colormapTexture, colormapIndex, hideBelow, rescaleMax, rasterVariable, varDef, tauHours],
   );
-  const pot = POTENTIAL_LAYERS[potentialId];
 
   const deckLayers = useMemo(() => {
     const out: unknown[] = [];
-    if (showCanopy && canopy) {
-      out.push(buildCanopyLayer({ geotiff: canopy, opacity: canopyOpacity, minHeight: canopyMinHeight, maxHeight: canopyMaxHeight, beforeId: BEFORE_ID }));
-    }
-    if (countyView && showCounties && counties && countyFrameData && countyBp && colormapImage) {
-      out.push(
-        buildCountyLayer({
-          counties,
-          frame: countyFrameData,
-          bpMean: countyBp,
-          peak: countyPeakData,
-          peakMode,
-          field: countyField,
-          stat: countyStat,
-          colormap: colormapImage,
-          colormapIndex,
-          hideBelow,
-          ffwiMax: rescaleMax,
-          bpFull: potentialNorm,
-          windowHours,
-          opacity: rasterOpacity,
-          updateKey: [leadTimeIdx, cacheVersion, countyField, countyStat, colormapIndex, hideBelow, rescaleMax, potentialNorm, countyBp, windowHours],
-          onHover: (i, x, y) => setCountyHover(i === null ? null : { i, x, y }),
-          onClick: () => {},
-          beforeId: BEFORE_ID,
-        }),
-      );
-    }
-    if (!countyView && showRaster && source && getTileData && colormapTexture) {
+    if (showRaster && source && getTileData && colormapTexture) {
       out.push(
         new ZarrLayer<zarr.Readable, "float32", FfwiTileData>({
           id: `hrrr-zarr-${initTimeIdx}-${windMode}-${rasterVariable}`,
@@ -399,59 +259,35 @@ export default function App() {
         } as never),
       );
     }
-    if (showLines && lines && lineFfwiNow && colormapImage) {
+    if (aefLayers) {
       out.push(
-        buildLineLayer({
-          lines,
-          ffwi: lineFfwiNow,
+        ...aefLayers.layers({
+          mode: fuel === "cover" ? "cover" : "lit",
+          teacher,
+          leadTimeIdx,
           hideBelow,
-          ffwiMax: rescaleMax,
-          colormap: colormapImage,
-          colormapIndex,
-          ghostAlpha: lineGhost,
-          maxWidth: lineMaxWidth,
-          onHover: (i, x, y) => setLineHover(i === null ? null : { i, x, y }),
+          rescaleMax,
+          opacity: fuelOpacity,
+          visible: fuel !== "off",
           beforeId: BEFORE_ID,
         }),
       );
     }
     return out;
+    // aefVersion: the controller's tiles or weather changed under the same props
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
-    showCanopy, canopy, canopyOpacity, canopyMinHeight, canopyMaxHeight,
-    showLines, lines, lineFfwiNow, lineGhost, lineMaxWidth, showCounties,
-    countyView, counties, countyFrameData, countyBp, colormapImage, countyField, countyStat, colormapIndex, hideBelow, countyPeakData, peakMode,
-    rescaleMax, potentialNorm, rasterOpacity, leadTimeIdx, cacheVersion, showRaster, source, getTileData, colormapTexture,
-    initTimeIdx, windMode, rasterVariable, selection, renderTile, windowHours,
+    showRaster, source, getTileData, colormapTexture, initTimeIdx, windMode, rasterVariable, selection, renderTile, rasterOpacity,
+    leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity,
   ]);
 
-  // The raster tiles the whole grid (24 shards); the county view and the lines only need the shards they touch.
-  const lineShardKeys = useMemo(() => {
-    if (!lines) return null;
-    const keys = new Set<string>();
-    for (let j = 0; j < lines.n; j++) keys.add(FfwiTileCache.keyFor(lines.px[j]!, lines.py[j]!));
-    return [...keys];
-  }, [lines]);
-  const neededShardKeys = useMemo(() => {
-    if (!countyView && !showLines) return null;
-    const keys = new Set<string>();
-    if (countyView && countyShardKeys) for (const k of countyShardKeys) keys.add(k);
-    if (showLines && lineShardKeys) for (const k of lineShardKeys) keys.add(k);
-    return keys.size ? [...keys] : null;
-  }, [countyView, showLines, countyShardKeys, lineShardKeys]);
-  const tilesTotal = neededShardKeys ? neededShardKeys.length : 24;
-  const tilesLoaded = neededShardKeys
-    ? neededShardKeys.filter((k) => cacheRef.current.has(k)).length
-    : cacheRef.current.size;
   const status: Status = {
     backend: source?.backend ?? null,
-    tilesLoaded,
-    tilesTotal,
-    potentialReady: potential !== null,
-    potentialLoading,
-    countiesNeeded: countyView,
-    countiesReady: counties !== null,
-    linesNeeded: showLines,
-    linesReady: lines !== null,
+    tilesLoaded: cacheRef.current.size,
+    tilesTotal: Math.max(cacheRef.current.size, showRaster ? 24 : 0),
+    aefIndexReady: aefIndex !== null && mosaic !== null,
+    aefReading: aefLayers?.work.reading ?? 0,
+    aefDone: aefLayers?.work.done ?? 0,
     error,
   };
   const loading = loadingSummary(status);
@@ -471,13 +307,18 @@ export default function App() {
     whiteSpace: "nowrap",
   });
 
+  const runLabel = source ? dateFromInitTimeIdx(initTimeIdx).toISOString().slice(0, 13).replace("T", " ") + "Z" : "";
+
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
       <MaplibreMap
         ref={mapRef}
-        initialViewState={{ longitude: -98, latitude: 38.5, zoom: 4 }}
+        initialViewState={START_VIEW}
+        hash
         mapStyle={MAP_STYLE_URL}
         attributionControl={false}
+        onLoad={(e) => setZoom(e.target.getZoom())}
+        onMove={(e) => setZoom(e.viewState.zoom)}
         onMouseMove={(e) => setHover({ lon: e.lngLat.lng, lat: e.lngLat.lat, x: e.point.x, y: e.point.y })}
         onMouseOut={() => setHover(null)}
       >
@@ -528,6 +369,13 @@ export default function App() {
         onLeadTimeIdxChange={setLeadTimeIdx}
         onPlayPauseToggle={() => setIsPlaying((p) => !p)}
         onFrameDurationMsChange={setFrameDurationMs}
+        fuel={fuel}
+        onFuelChange={setFuel}
+        teacher={teacher}
+        onTeacherChange={setTeacher}
+        fuelOpacity={fuelOpacity}
+        onFuelOpacityChange={setFuelOpacity}
+        zoom={zoom}
         windMode={windMode}
         onWindModeChange={setWindMode}
         colormapId={colormapId}
@@ -538,106 +386,28 @@ export default function App() {
         onHideBelowChange={setHideBelow}
         showRaster={showRaster}
         onShowRasterChange={setShowRaster}
-        showCounties={showCounties}
-        onShowCountiesChange={setShowCounties}
-        rasterOpacity={rasterOpacity}
-        onRasterOpacityChange={setRasterOpacity}
-        potentialId={potentialId}
-        onPotentialIdChange={setPotentialId}
-        potentialNorm={potentialNorm}
-        onPotentialNormChange={setPotentialNorm}
-        viewMode={viewMode}
-        onViewModeChange={setViewMode}
         rasterVariable={rasterVariable}
         onRasterVariableChange={setRasterVariable}
-        countyField={countyField}
-        onCountyFieldChange={setCountyField}
-        countyStat={countyStat}
-        onCountyStatChange={setCountyStat}
-        peakMode={peakMode}
-        onPeakModeChange={setPeakMode}
-        countyCount={counties?.features.length ?? 0}
+        rasterOpacity={rasterOpacity}
+        onRasterOpacityChange={setRasterOpacity}
         tauHours={tauHours}
         onTauHoursChange={setTauHours}
-        windowHours={windowHours}
-        onWindowHoursChange={setWindowHours}
-        showCanopy={showCanopy}
-        onShowCanopyChange={setShowCanopy}
-        canopyReady={canopy !== null}
-        canopyOpacity={canopyOpacity}
-        onCanopyOpacityChange={setCanopyOpacity}
-        canopyMinHeight={canopyMinHeight}
-        onCanopyMinHeightChange={setCanopyMinHeight}
-        canopyMaxHeight={canopyMaxHeight}
-        onCanopyMaxHeightChange={setCanopyMaxHeight}
-        showLines={showLines}
-        onShowLinesChange={setShowLines}
-        lineGhost={lineGhost}
-        onLineGhostChange={setLineGhost}
-        lineMaxWidth={lineMaxWidth}
-        onLineMaxWidthChange={setLineMaxWidth}
-        lineHeadline={lineHeadline}
         status={status}
       />
-      {lineHover && lines && lineFfwiNow ? (() => {
-        const i = lineHover.i;
-        const wx = cacheRef.current.sample(lines.px[i]!, lines.py[i]!, leadTimeIdx);
-        return (
-          <div style={tooltipStyle(lineHover.x, lineHover.y)}>
-            <div style={{ fontWeight: 600 }}>Transmission line, {VOLT_CLASS_LABEL[lines.vc[i]!]}</div>
-            <div>
-              {wx && Number.isFinite(wx.ffwi)
-                ? `FFWI ${wx.ffwi.toFixed(0)} · wind ${wx.windMph} mph · RH ${wx.rh}% · ${wx.tc} °C`
-                : "forecast not loaded yet"}
-              {tauHours > 0 ? ` (fuel lag ${tauHours} h)` : ""}
-            </div>
-          </div>
-        );
-      })() : null}
-      {countyView && countyHover && !lineHover && counties && countyFrameData && countyBp ? (
-        <div style={tooltipStyle(countyHover.x, countyHover.y)}>
-          <div style={{ fontWeight: 600 }}>
-            {counties.name[countyHover.i]} {counties.features[countyHover.i]!.properties.LSAD ?? "County"}, {counties.state[countyHover.i]}
-          </div>
-          {countyField === "peak" && countyPeakData ? (
-            <div>
-              {countyPeakData.peakLead[countyHover.i]! >= 0
-                ? `peak mean FFWI ${countyPeakData.peakValue[countyHover.i]!.toFixed(0)} at +${countyPeakData.peakLead[countyHover.i]} h · ` +
-                  (countyPeakData.onsetLead[countyHover.i]! >= 0
-                    ? `first ≥ ${hideBelow} at +${countyPeakData.onsetLead[countyHover.i]} h`
-                    : `never reaches ${hideBelow}`)
-                : "not loaded yet"}
-            </div>
-          ) : null}
-          <div>
-            FFWI this hour:{" "}
-            {Number.isFinite(countyFrameData.mean[countyHover.i]!)
-              ? `mean ${countyFrameData.mean[countyHover.i]!.toFixed(0)} · max ${countyFrameData.max[countyHover.i]!.toFixed(0)} · ${Math.round(
-                  100 * countyFrameData.share[countyHover.i]!,
-                )}% of pixels ≥ ${hideBelow} · ${countyFrameData.hours[countyHover.i]!.toFixed(1)} of the last ${countyFrameData.windowSeen} h ≥ ${hideBelow}`
-              : "not loaded yet"}
-            {tauHours > 0 ? ` (fuel lag ${tauHours} h)` : ""}
-          </div>
-          <div>
-            {pot.shortLabel} mean {Number.isFinite(countyBp[countyHover.i]!) ? pot.format(countyBp[countyHover.i]!) : "n/a"} ·{" "}
-            {counties.pxStart[countyHover.i + 1]! - counties.pxStart[countyHover.i]!} HRRR pixels sampled
-          </div>
-        </div>
-      ) : null}
-      {!countyView && hover && !lineHover && hoverInfo && hoverInfo.lit && hoverInfo.wx ? (
+      {hover && hoverInfo && (hoverInfo.className || (hoverInfo.wx && Number.isFinite(hoverInfo.wx.ffwi))) ? (
         <div style={tooltipStyle(hover.x, hover.y)}>
           <div style={{ fontWeight: 600 }}>
-            {Number.isFinite(hoverInfo.wx.ffwi) ? `FFWI ${hoverInfo.wx.ffwi.toFixed(1)}` : "FFWI n/a"}
-            {tauHours > 0 && Number.isFinite(hoverInfo.wx.ffwiInstant)
-              ? ` (${tauHours} h fuel lag · instant ${hoverInfo.wx.ffwiInstant.toFixed(1)})`
-              : ""}
+            {hoverInfo.className ? `${hoverInfo.className} · fuel ${hoverInfo.weight.toFixed(2)}` : "no embedding here"}
+            {hoverInfo.ground ? ` · canopy ${Math.round(hoverInfo.ground.cover * 100)}%` : ""}
           </div>
           <div>
-            wind {hoverInfo.wx.windMph} mph · RH {hoverInfo.wx.rh}% · {hoverInfo.wx.tc} °C ·{" "}
-            {pot.shortLabel} {Number.isFinite(hoverInfo.bp) ? pot.format(hoverInfo.bp) : "n/a"}
+            {hoverInfo.wx && Number.isFinite(hoverInfo.wx.ffwi)
+              ? `FFWI ${hoverInfo.wx.ffwi.toFixed(0)}${hoverInfo.className ? ` x ${hoverInfo.weight.toFixed(2)} = ${hoverInfo.lit.toFixed(0)}` : ""} · wind ${hoverInfo.wx.windMph} mph · RH ${hoverInfo.wx.rh}% · ${hoverInfo.wx.tc} °C`
+              : "forecast not loaded here yet"}
+            {tauHours > 0 ? ` (fuel lag ${tauHours} h)` : ""}
           </div>
           <div style={{ color: "#aaa" }}>
-            {hover.lat.toFixed(2)}, {hover.lon.toFixed(2)}
+            {hover.lat.toFixed(3)}, {hover.lon.toFixed(3)} · {runLabel} +{leadTimeIdx} h
           </div>
         </div>
       ) : null}

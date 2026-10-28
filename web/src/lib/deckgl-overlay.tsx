@@ -6,5 +6,7 @@ import { useControl } from "react-map-gl/maplibre";
 export function DeckGlOverlay(props: MapboxOverlayProps) {
   const overlay = useControl<MapboxOverlay>(() => new MapboxOverlay(props));
   overlay.setProps(props);
+  // debug hook for the headless probe
+  (globalThis as unknown as { __overlay?: MapboxOverlay }).__overlay = overlay;
   return null;
 }

@@ -32,20 +32,25 @@ weights; static site.
 Order of work: Python first (the model, checked by looking at its land cover
 maps), then the TypeScript map.
 
-## Status (2026-10-28)
+## Status (2026-10-28, map built)
 
-- `web/` is the fosberg-hrrr app (branch `canopy-lines`) copied in as the
-  starting code, with Chakra UI replaced by a plain CSS glass panel
-  (`web/src/ui/panel.css`, `controls.tsx`, `ControlPanel.tsx`): one card on the
-  left that hangs down and scrolls, foldable sections whose state lives in
-  localStorage. It still shows the HRRR FFWI, counties, lines and Meta canopy
-  from the old app; the AEF layers are not in it yet.
-- `scripts/sample_landcover.py` pulls training material per AEF tile (12 CONUS
-  sites in `data/train_tiles.csv`): AEF 2025 at 40 m (COG overview factor 4,
-  verified centroid embeddings), Esri IO 2024 and Annual NLCD 2024 warped to
-  10 m on the tile grid, Meta canopy v1 downsampled averaged to 40 m.
-- `scripts/fit_landcover_head.py` fits the heads and writes `models/*.json`
-  plus side-by-side previews (teacher | head) under `data/previews/`.
+- `web/` draws the ground lit by the hour's FFWI (`src/aef/`): the COG
+  overviews zoomed out (zoom 9 to 12, `MosaicLayer` of per-file `COGLayer`s,
+  overviews narrower than 128 px hidden because their tile corners fall where
+  proj4 returns null), the 10 m Zarr mosaic zoomed in (`ZarrLayer`, zoom 12+).
+  Tiles are classified in a worker pool (`aef.worker.ts`, the folded heads in
+  `head.ts`); the shader (`render.ts`) looks up class color and fuel weight in
+  a small texture and the FFWI in a per-tile weather texture (49 leads,
+  bilinear over the HRRR pixels, `weather.ts`). Modes: lit by FFWI, land cover,
+  off; teachers NLCD and Esri. Opens on the Marshall Fire (2021-12-30 12Z run,
+  +6 h) over Boulder County; URL hash holds the view.
+- The HRRR FFWI field is still available as its own layer ("The weather"
+  fold); the old county, burn probability, lines and Meta canopy layers are gone.
+- `web/public/aef-2025-conus.json` is the COG index (1982 tiles), from
+  `scripts/build_aef_index.py`.
+- Fuel weights per class (`web/src/aef/fuel.ts`) are a first cut, not tuned.
+- Headless checks: `.claude/memory/probe_tiles.py` (tiles, histogram,
+  tooltip, screenshots in both modes), `probe_map.py`, `probe_deck.py`.
 
 ## Model
 
@@ -81,6 +86,7 @@ maps), then the TypeScript map.
 ```sh
 cd web && npm install && PORT=5372 npm run dev   # 5371 and 3000 are taken on this machine
 npm run build && npm run typecheck
+uv run --with duckdb scripts/build_aef_index.py   # the COG tile index for the browser
 
 uv run scripts/sample_landcover.py              # data/tiles/<site>.npz, one tile at a time
 uv run scripts/fit_landcover_head.py            # models/*.json, data/previews/*.png

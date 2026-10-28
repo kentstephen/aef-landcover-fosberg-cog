@@ -31,7 +31,7 @@ export type MakeGetTileDataArgs = {
 };
 
 /** IEEE half-float bits for a float32 (round-to-nearest-even; NaN/Inf preserved). */
-function toHalf(x: number): number {
+export function toHalf(x: number): number {
   if (Number.isNaN(x)) return 0x7e00;
   const f = new Float32Array(1);
   const i = new Uint32Array(f.buffer);

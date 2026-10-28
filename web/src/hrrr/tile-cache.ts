@@ -1,5 +1,5 @@
 import { ffwiFromMoisture, lagMoisture, M_SCALE, U16_NAN, WIND_SCALE } from "../ffwi/compute.js";
-import { HRRR_LEAD_TIME_COUNT, HRRR_SHARD } from "./metadata.js";
+import { HRRR_GRID, HRRR_LEAD_TIME_COUNT, HRRR_SHARD } from "./metadata.js";
 
 /**
  * JS-side cache of the per-shard Fosberg inputs, filled by getTileData (and
@@ -65,6 +65,11 @@ export class FfwiTileCache {
 
   private static idxOf(t: FfwiTile): number {
     return Math.floor(t.rowStart / HRRR_SHARD.height) * SHARD_COLS + Math.floor(t.colStart / HRRR_SHARD.width);
+  }
+
+  /** Whether a pixel lies on the HRRR grid at all. */
+  inGrid(hrrrX: number, hrrrY: number): boolean {
+    return hrrrX >= 0 && hrrrY >= 0 && hrrrX < HRRR_GRID.width && hrrrY < HRRR_GRID.height;
   }
 
   /** The shard holding a pixel, or undefined if not loaded. */

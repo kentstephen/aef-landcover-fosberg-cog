@@ -1,6 +1,11 @@
 import { COLORMAP_INDEX } from "@developmentseed/deck.gl-raster/gpu-modules";
 import colormapsPngUrl from "@developmentseed/deck.gl-raster/gpu-modules/colormaps.png";
 import { useState } from "react";
+import { FUEL } from "../aef/fuel.js";
+import { HEADS, type Teacher } from "../aef/head.js";
+import { COG_MIN_ZOOM } from "../aef/sources.js";
+import { MOSAIC_MIN_ZOOM } from "../aef/mosaic.js";
+import { rampGradient } from "../aef/ramp.js";
 import type { WindMode } from "../ffwi/compute.js";
 import {
   dateFromInitTimeIdx,
@@ -11,20 +16,18 @@ import {
   isoDateString,
 } from "../hrrr/metadata.js";
 import { RASTER_VARIABLES, windLabel, type RasterVariable } from "../hrrr/variables.js";
-import { POTENTIAL_LAYERS, type PotentialLayerId } from "../potential/service.js";
 import { A, Check, Field, Fold, Help, Ramp, Seg, Slider } from "./controls.js";
 import "./panel.css";
 
 const COLORMAP_ROW_COUNT = Object.keys(COLORMAP_INDEX).length;
 
-/** Protan-safe, luminance-monotone ramps with a bright hot end. */
+/** Protan-safe, luminance-monotone ramps with a bright hot end (the HRRR field). */
 export const COLORMAP_CHOICES = [
+  { id: "solar", label: "Solar" },
   { id: "inferno", label: "Inferno" },
   { id: "magma", label: "Magma" },
   { id: "thermal", label: "Thermal" },
-  { id: "solar", label: "Solar" },
   { id: "hot", label: "Hot" },
-  { id: "afmhot", label: "Afmhot" },
   { id: "viridis", label: "Viridis" },
   { id: "cividis", label: "Cividis" },
   { id: "ylorbr", label: "YlOrBr" },
@@ -32,33 +35,17 @@ export const COLORMAP_CHOICES = [
 ] as const;
 export type ColormapChoiceId = (typeof COLORMAP_CHOICES)[number]["id"];
 
-/** What the map draws: one FFWI number per county (default), or the 3 km raster of FFWI or one of its inputs. */
-export type ViewMode = "county" | "raster";
-export type CountyField = "ffwi" | "peak" | "bp";
-export type PeakMode = "peak" | "onset";
-export type CountyStat = "share" | "mean" | "max" | "hours";
+/** What the land cover layer draws: the ground lit by the hour's FFWI, the classes themselves, or nothing. */
+export type FuelChoice = "lit" | "cover" | "off";
 
 export type Status = {
   backend: "icechunk" | "zarr-v3" | null;
   tilesLoaded: number;
   tilesTotal: number;
-  potentialReady: boolean;
-  potentialLoading: boolean;
-  /** County view only: the counties GeoJSON + join. */
-  countiesNeeded: boolean;
-  countiesReady: boolean;
-  linesNeeded: boolean;
-  linesReady: boolean;
+  aefIndexReady: boolean;
+  aefReading: number;
+  aefDone: number;
   error: string | null;
-};
-
-/** The headline number: miles of transmission line above the hide line this hour, and the run's peak. */
-export type LineHeadline = {
-  milesNow: number;
-  milesTotal: number;
-  milesLoaded: number;
-  peakLead: number;
-  milesPeak: number;
 };
 
 /** What is still loading, for the panel bar and the map pill. */
@@ -72,20 +59,16 @@ export function loadingSummary(s: Status): { fraction: number; label: string } |
   }
   total += s.tilesTotal;
   done += Math.min(s.tilesLoaded, s.tilesTotal);
-  if (s.tilesLoaded < s.tilesTotal) parts.push(`forecast tiles ${s.tilesLoaded} / ${s.tilesTotal}`);
-  if (s.countiesNeeded) {
+  if (s.tilesLoaded < s.tilesTotal) parts.push(`forecast ${s.tilesLoaded} / ${s.tilesTotal}`);
+  if (!s.aefIndexReady) {
     total += 1;
-    if (s.countiesReady) done += 1;
-    else parts.push("counties");
+    parts.push("the embedding index");
   }
-  if (s.linesNeeded) {
-    total += 1;
-    if (s.linesReady) done += 1;
-    else parts.push("transmission lines");
+  if (s.aefReading > 0) {
+    total += s.aefReading + s.aefDone;
+    done += s.aefDone;
+    parts.push(`land cover ${s.aefDone} / ${s.aefReading + s.aefDone}`);
   }
-  total += 1;
-  if (s.potentialReady) done += 1;
-  else parts.push("burn probability");
   if (parts.length === 0) return null;
   return { fraction: total > 0 ? done / total : 0, label: `Loading ${parts.join(" · ")}` };
 }
@@ -101,6 +84,14 @@ export type ControlPanelProps = {
   onPlayPauseToggle: () => void;
   onFrameDurationMsChange: (ms: number) => void;
 
+  fuel: FuelChoice;
+  onFuelChange: (f: FuelChoice) => void;
+  teacher: Teacher;
+  onTeacherChange: (t: Teacher) => void;
+  fuelOpacity: number;
+  onFuelOpacityChange: (v: number) => void;
+  zoom: number;
+
   windMode: WindMode;
   onWindModeChange: (m: WindMode) => void;
   colormapId: ColormapChoiceId;
@@ -111,64 +102,19 @@ export type ControlPanelProps = {
   onHideBelowChange: (v: number) => void;
   showRaster: boolean;
   onShowRasterChange: (v: boolean) => void;
-  showCounties: boolean;
-  onShowCountiesChange: (v: boolean) => void;
-  rasterOpacity: number;
-  onRasterOpacityChange: (v: number) => void;
-
-  potentialId: PotentialLayerId;
-  onPotentialIdChange: (id: PotentialLayerId) => void;
-  potentialNorm: number;
-  onPotentialNormChange: (v: number) => void;
-  viewMode: ViewMode;
-  onViewModeChange: (m: ViewMode) => void;
   rasterVariable: RasterVariable;
   onRasterVariableChange: (v: RasterVariable) => void;
-  countyField: CountyField;
-  onCountyFieldChange: (f: CountyField) => void;
-  countyStat: CountyStat;
-  onCountyStatChange: (s: CountyStat) => void;
-  peakMode: PeakMode;
-  onPeakModeChange: (m: PeakMode) => void;
-  countyCount: number;
+  rasterOpacity: number;
+  onRasterOpacityChange: (v: number) => void;
   tauHours: number;
   onTauHoursChange: (v: number) => void;
-  windowHours: number;
-  onWindowHoursChange: (v: number) => void;
-
-  showCanopy: boolean;
-  onShowCanopyChange: (v: boolean) => void;
-  canopyReady: boolean;
-  canopyOpacity: number;
-  onCanopyOpacityChange: (v: number) => void;
-  canopyMinHeight: number;
-  onCanopyMinHeightChange: (v: number) => void;
-  canopyMaxHeight: number;
-  onCanopyMaxHeightChange: (v: number) => void;
-  showLines: boolean;
-  onShowLinesChange: (v: boolean) => void;
-  lineGhost: number;
-  onLineGhostChange: (v: number) => void;
-  lineMaxWidth: number;
-  onLineMaxWidthChange: (v: number) => void;
-  lineHeadline: LineHeadline | null;
 
   status: Status;
 };
 
-function fmtMiles(mi: number): string {
-  return mi >= 10_000 ? `${(mi / 1000).toFixed(0)}k` : mi >= 1000 ? `${(mi / 1000).toFixed(1)}k` : `${Math.round(mi)}`;
-}
-
-function fmtRun(init: Date, leadH: number): string {
-  const d = new Date(init.getTime() + leadH * 3_600_000);
-  return `${String(d.getUTCDate()).padStart(2, "0")} ${String(d.getUTCHours()).padStart(2, "0")}Z`;
-}
-
-const UNDER_OPTIONS = [
+const FIELD_OPTIONS = [
   { id: "nothing", label: "nothing" },
-  ...Object.values(RASTER_VARIABLES).map((v) => ({ id: v.id as string, label: v.id === "ffwi" ? "FFWI raster" : v.label.toLowerCase() })),
-  { id: "county", label: "counties" },
+  ...Object.values(RASTER_VARIABLES).map((v) => ({ id: v.id as string, label: v.id === "ffwi" ? "FFWI" : v.label.toLowerCase() })),
 ];
 
 export function ControlPanel(p: ControlPanelProps) {
@@ -178,74 +124,96 @@ export function ControlPanel(p: ControlPanelProps) {
   const validStr = `${isoDateString(validUTC)} ${String(validUTC.getUTCHours()).padStart(2, "0")}:00Z`;
   const s = p.status;
   const loading = loadingSummary(s);
-  const pot = POTENTIAL_LAYERS[p.potentialId];
   const rv = RASTER_VARIABLES[p.rasterVariable];
   const [min, setMin] = useState(false);
+  const head = HEADS[p.teacher];
+  const reader = p.zoom >= MOSAIC_MIN_ZOOM ? "10 m mosaic" : p.zoom >= COG_MIN_ZOOM ? "COG overviews" : `zoom in to ${COG_MIN_ZOOM} for the land cover`;
 
-  const under = p.viewMode === "county" ? (p.showCounties ? "county" : "nothing") : p.showRaster ? p.rasterVariable : "nothing";
-  const underOptions = UNDER_OPTIONS.map((o) => (o.id === "wind" ? { ...o, label: windLabel(p.windMode).replace(/^wind: /, "wind ") } : o));
-  const setUnder = (id: string) => {
-    if (id === "nothing") {
-      p.onShowRasterChange(false);
-      p.onShowCountiesChange(false);
-    } else if (id === "county") {
-      p.onViewModeChange("county");
-      p.onShowCountiesChange(true);
-    } else {
-      p.onViewModeChange("raster");
+  const field = p.showRaster ? p.rasterVariable : "nothing";
+  const fieldOptions = FIELD_OPTIONS.map((o) => (o.id === "wind" ? { ...o, label: windLabel(p.windMode).replace(/^wind: /, "wind ") } : o));
+  const setField = (id: string) => {
+    if (id === "nothing") p.onShowRasterChange(false);
+    else {
       p.onShowRasterChange(true);
       p.onRasterVariableChange(id as RasterVariable);
     }
   };
-
-  const rampLabel =
-    p.viewMode === "county"
-      ? p.countyField === "peak"
-        ? `${p.peakMode === "peak" ? "hour of peak" : "first hour ≥ " + p.hideBelow}: +0 h (${fmtRun(dateFromInitTimeIdx(p.initTimeIdx), 0)}) to +48 h (${fmtRun(dateFromInitTimeIdx(p.initTimeIdx), 48)})`
-        : p.countyField === "bp"
-          ? `county mean ${pot.shortLabel} 0 to ${pot.format(p.potentialNorm)} (sqrt)`
-          : p.countyStat === "share"
-            ? `share of pixels ≥ ${p.hideBelow}: 0 to 100%`
-            : p.countyStat === "hours"
-              ? `hours ≥ ${p.hideBelow} in the last ${p.windowHours}: 0 to ${p.windowHours}`
-              : `county ${p.countyStat} FFWI ${p.hideBelow} to ${p.rescaleMax}`
-      : p.rasterVariable === "ffwi"
-        ? `FFWI${p.tauHours > 0 ? ` (${p.tauHours} h fuel lag)` : ""} ${p.hideBelow} to ${p.rescaleMax}`
-        : `${rv.format(rv.min)} to ${rv.format(rv.max)}${rv.reversed ? " (reversed: dry is bright)" : ""}`;
+  const fieldRampLabel =
+    p.rasterVariable === "ffwi"
+      ? `FFWI${p.tauHours > 0 ? ` (${p.tauHours} h fuel lag)` : ""} ${p.hideBelow} to ${p.rescaleMax}`
+      : `${rv.format(rv.min)} to ${rv.format(rv.max)}${rv.reversed ? " (reversed: dry is bright)" : ""}`;
 
   return (
     <div className={`pn${min ? " min" : ""}`}>
       <div className="pn-title">
-        <h1>Fire weather, hour by hour</h1>
+        <h1>Fuel under fire weather</h1>
         <button type="button" className="pn-min" aria-label={min ? "Expand panel" : "Collapse panel"} onClick={() => setMin((v) => !v)}>
           {min ? "▸" : "▾"}
         </button>
       </div>
 
       <p>
-        The <b>Fosberg Fire Weather Index</b> is one number for how hard the weather would push a fire in dry grass or brush:
-        temperature and humidity set how dry fine fuel is, wind does the escalating; bone-dry fuel in a 30 mph wind = 100. It knows
-        nothing about the ground. Computed here from NOAA's HRRR forecast at 3 km, one frame per hour for the next two days. The{" "}
-        <b>county view</b> shows one FFWI number per county this hour; hover for the county's USFS burn probability, or press the
-        button for a static map of it. The <b>raster view</b> shows the 3 km field itself: FFWI or any of its inputs (temperature,
-        humidity, wind).
+        The ground, read from <b>AlphaEarth embeddings</b> by a small land cover model, lit hour by hour by the{" "}
+        <b>Fosberg Fire Weather Index</b> from NOAA's HRRR forecast. Open fuel (grass, shrub, pasture) carries the whole index,
+        forest part of it, built-up ground and water none; where the weather is calm the ground is invisible, and it comes up
+        in viridis as the forecast worsens. Switch to the classes to check the model.
       </p>
       <p className="muted small" style={{ marginTop: 6 }}>
-        Data: <A href="https://dynamical.org/catalog/noaa-hrrr-forecast-48-hour/">NOAA HRRR 48 h</A> via{" "}
+        Data: <A href="https://source.coop/tge-labs/aef">AlphaEarth Foundations 2025</A> (tge-labs on Source Cooperative) ·{" "}
+        <A href="https://dynamical.org/catalog/noaa-hrrr-forecast-48-hour/">NOAA HRRR 48 h</A> via{" "}
         <A href="https://dynamical.org">dynamical.org</A> ({s.backend === "icechunk" ? "Icechunk" : s.backend === "zarr-v3" ? "Zarr v3" : "opening"}) ·{" "}
-        <A href="https://wildfirerisk.org">USFS Wildfire Risk to Communities 2024</A> via{" "}
-        <A href="https://imagery.geoplatform.gov/iipp/rest/services/Fire_Aviation">GeoPlatform</A> ·{" "}
-        <A href="https://www.frames.gov/catalog/27085">Fosberg 1978</A> ·{" "}
-        <A href="https://hifld-geoplatform.hub.arcgis.com/datasets/electric-power-transmission-lines">HIFLD transmission lines</A> ·{" "}
-        <A href="https://source.coop/tge-labs/meta-chm-v2">Meta / WRI canopy height v2</A>
+        <A href="https://www.frames.gov/catalog/27085">Fosberg 1978</A> · model taught by Annual NLCD 2024 and Esri / Impact Observatory LULC 2024
       </p>
 
       {loading ? (
         <div className="field" style={{ marginTop: 8 }}>
           <div className="bar"><span style={{ width: `${Math.round(loading.fraction * 100)}%` }} /></div>
-          <p className="muted small">{loading.label}. The forecast is read straight from the cloud store, about 1 MB per tile; the county map fills in as tiles arrive.</p>
+          <p className="muted small">{loading.label}. Everything is read straight from the cloud stores; nothing is precomputed but the model weights.</p>
         </div>
       ) : null}
+
+      <Fold k="fuel" label="The ground" defaultOpen tag={p.fuel === "lit" ? "lit by FFWI" : p.fuel === "cover" ? "land cover" : "off"}>
+        <div className="row">
+          <Seg
+            value={p.fuel}
+            options={[
+              { id: "lit", label: "Lit by FFWI" },
+              { id: "cover", label: "Land cover" },
+              { id: "off", label: "Off" },
+            ]}
+            onChange={p.onFuelChange}
+          />
+          <Help label="The ground">
+            Every pixel's 64-band AlphaEarth embedding goes through a linear head (fit offline against the 2024 land cover maps,
+            held-out accuracy 0.87 to 0.92 for Esri, 0.64 to 0.92 for NLCD) to a class. Lit: the hour's FFWI times the class's
+            fuel weight, hidden below the hide line, viridis from there to the ramp top. Zoomed out the embeddings come from
+            the COG overviews (each overview pixel is the centroid of its children), zoomed in from the 10 m mosaic.
+          </Help>
+        </div>
+        <p className="muted small">Reading: {reader}{s.aefReading > 0 ? ` · ${s.aefReading} tiles in flight` : ""}</p>
+        <div className="row">
+          <Seg value={p.teacher} options={[{ id: "nlcd", label: "NLCD (16 classes)" }, { id: "esri", label: "Esri (9 classes)" }]} onChange={p.onTeacherChange} />
+        </div>
+        {p.fuel === "lit" ? (
+          <>
+            <div className="ramp" role="img" aria-label="Viridis ramp" style={{ backgroundImage: rampGradient() }} />
+            <p className="muted small">FFWI x fuel weight, {p.hideBelow} (invisible) to {p.rescaleMax} (ramp top){p.tauHours > 0 ? ` · ${p.tauHours} h fuel lag` : ""}</p>
+          </>
+        ) : null}
+        <Field label={`Opacity ${Math.round(p.fuelOpacity * 100)}%`}>
+          <Slider min={0.05} max={1} step={0.05} value={p.fuelOpacity} onChange={p.onFuelOpacityChange} label="Ground opacity" onReset={() => p.onFuelOpacityChange(0.9)} />
+        </Field>
+        <div className="legend">
+          {head.classes.map((code, i) => (
+            <div key={code} className="legend-row">
+              <span className="sw" style={{ background: head.colors[i] }} />
+              <span>{head.names[i]}</span>
+              <span className="muted">{(FUEL[p.teacher][code] ?? 0).toFixed(2)}</span>
+            </div>
+          ))}
+        </div>
+        <p className="muted small">Right column: the fuel weight each class carries (first cut, to be tuned).</p>
+      </Fold>
 
       <Fold k="time" label="Forecast hour" defaultOpen tag={`+${hours} h · ${validStr}`}>
         <Field label="Forecast run (UTC)">
@@ -256,7 +224,7 @@ export function ControlPanel(p: ControlPanelProps) {
               max={p.initTimeCount > 0 ? isoDateString(dateFromInitTimeIdx(p.initTimeCount - 1)) : undefined}
               value={isoDateString(dateFromInitTimeIdx(p.initTimeIdx))}
               disabled={p.initTimeCount === 0}
-              onChange={(e) => p.onInitTimeIdxChange(initTimeIdxFromDate(new Date(`${e.target.value}T00:00:00Z`), Math.max(0, p.initTimeCount - 1)))}
+              onChange={(e) => p.onInitTimeIdxChange(initTimeIdxFromDate(new Date(`${e.target.value}T12:00:00Z`), Math.max(0, p.initTimeCount - 1)))}
             />
             {p.initTimeCount > 0 && p.initTimeIdx < p.initTimeCount - 1 ? (
               <a href="#" className="small" onClick={(e) => { e.preventDefault(); p.onInitTimeIdxChange(p.initTimeCount - 1); }}>Jump to latest forecast</a>
@@ -269,7 +237,7 @@ export function ControlPanel(p: ControlPanelProps) {
           label={
             <span className="row">
               <span>+<span style={{ display: "inline-block", minWidth: "2ch", textAlign: "right" }}>{hours}</span> h · {validStr}</span>
-              <Help label="Forecast hour">49 hourly steps, +0 to +48 h. Space toggles play.</Help>
+              <Help label="Forecast hour">49 hourly steps, +0 to +48 h. Space toggles play. The run opens on the Marshall Fire day (2021-12-30, 12Z run, +6 h is late morning in Colorado); pick any date, or jump to the latest run.</Help>
             </span>
           }
         >
@@ -285,120 +253,33 @@ export function ControlPanel(p: ControlPanelProps) {
         </Field>
       </Fold>
 
-      <Fold k="lines" label="Transmission lines" defaultOpen tag={p.showLines ? "on" : "off"}>
+      <Fold k="field" label="The weather" defaultOpen tag={fieldOptions.find((o) => o.id === field)?.label}>
         <div className="row">
-          <Check checked={p.showLines} onChange={p.onShowLinesChange} label="Show" />
-          <Help label="Lines">
-            HIFLD Electric Power Transmission Lines (52k lines at 100 kV and up, about 420k miles), cut into pieces of at most 3 km
-            and lit by the FFWI at the HRRR pixel under each piece. Public safety power shutoffs are called on these same inputs
-            (wind and low humidity), and line faults are a leading ignition cause. Faint = below the hide line; above it the line
-            takes the colormap from the hide line to the ramp top and widens with it. Voltage class is in the tooltip.
-          </Help>
-        </div>
-        {p.showLines ? (
-          <>
-            <p className="lead">
-              {p.lineHeadline
-                ? `${fmtMiles(p.lineHeadline.milesNow)} of ${fmtMiles(p.lineHeadline.milesTotal)} miles of transmission line above FFWI ${p.hideBelow} at +${hours} h` +
-                  (p.lineHeadline.milesPeak > 0 ? `, peaking at ${fmtMiles(p.lineHeadline.milesPeak)} miles at +${p.lineHeadline.peakLead} h` : "") +
-                  (p.lineHeadline.milesLoaded < 0.98 * p.lineHeadline.milesTotal
-                    ? ` (${Math.round((100 * p.lineHeadline.milesLoaded) / p.lineHeadline.milesTotal)}% of the network has its forecast so far)`
-                    : "")
-                : s.linesReady
-                  ? "waiting for the forecast tiles"
-                  : "loading the lines (9 MB)"}
-            </p>
-            <Field label={`Width: 1 px at FFWI ${p.hideBelow} to ${p.lineMaxWidth} px at ${p.rescaleMax} (color and width follow the same number; the colormap is the one below, used from its 35% mark up so a lit line is never the dark end)`}>
-              <Slider min={1} max={6} step={0.5} value={p.lineMaxWidth} onChange={p.onLineMaxWidthChange} label="Max width" onReset={() => p.onLineMaxWidthChange(3)} />
-            </Field>
-            <Field label={`Lines below the hide line at ${Math.round(p.lineGhost * 100)}% opacity${p.lineGhost === 0 ? " (hidden)" : ""}`}>
-              <Slider min={0} max={0.6} step={0.01} value={p.lineGhost} onChange={p.onLineGhostChange} label="Ghost opacity" onReset={() => p.onLineGhostChange(0.18)} />
-            </Field>
-          </>
-        ) : null}
-      </Fold>
-
-      <Fold k="canopy" label="Canopy" tag={p.showCanopy ? "on" : "off"}>
-        <div className="row">
-          <Check checked={p.showCanopy} onChange={p.onShowCanopyChange} label="Show" />
-          <Help label="Canopy">
-            Meta and WRI global tree canopy height v2 (DINOv3 on satellite imagery, about 1.2 m native), drawn here from its global
-            overview as a single green ramp: dark at the minimum height, bright at the maximum, nothing drawn below the minimum.
-            Context for the lines, not a second subject: a treed corridor is where a tree can reach a conductor in wind.
-          </Help>
-        </div>
-        {p.showCanopy ? (
-          <>
-            {!p.canopyReady ? <p className="muted small">opening the canopy overview</p> : null}
-            <Field label={`Opacity ${Math.round(p.canopyOpacity * 100)}%`}>
-              <Slider min={0.05} max={1} step={0.05} value={p.canopyOpacity} onChange={p.onCanopyOpacityChange} label="Canopy opacity" onReset={() => p.onCanopyOpacityChange(0.3)} />
-            </Field>
-            <Field label={`Drawn from ${p.canopyMinHeight} m, brightest at ${p.canopyMaxHeight} m`}>
-              <Slider min={1} max={20} step={1} value={p.canopyMinHeight} onChange={p.onCanopyMinHeightChange} label="Min height" onReset={() => p.onCanopyMinHeightChange(3)} />
-              <Slider min={10} max={60} step={5} value={p.canopyMaxHeight} onChange={p.onCanopyMaxHeightChange} label="Max height" onReset={() => p.onCanopyMaxHeightChange(30)} />
-            </Field>
-          </>
-        ) : null}
-      </Fold>
-
-      <Fold k="field" label="The field" defaultOpen tag={underOptions.find((o) => o.id === under)?.label}>
-        <div className="row">
-          <span className="muted small">Under the lines:</span>
+          <span className="muted small">Draw the 3 km field itself:</span>
           <Help label="FFWI">
-            Fosberg 1978. Temperature and humidity set how dry fine fuel is; wind does the escalating. Sustained 10 m wind is the
-            standard input. 3 km HRRR pixels, reprojected on the GPU.
+            Fosberg 1978. Temperature and humidity set how dry fine fuel is; wind does the escalating; bone-dry fuel in a 30 mph
+            wind = 100. Sustained 10 m wind is the standard input. 3 km HRRR pixels, reprojected on the GPU.
           </Help>
         </div>
-        <Seg value={under} options={underOptions} onChange={setUnder} />
-        {p.viewMode === "county" && p.showCounties ? (
+        <Seg value={field} options={fieldOptions} onChange={setField} />
+        {p.showRaster ? (
           <>
-            <div className="row">
-              <Seg
-                value={p.countyField}
-                options={[
-                  { id: "ffwi", label: "FFWI this hour" },
-                  { id: "peak", label: "When it peaks" },
-                  { id: "bp", label: "Burn probability" },
-                ]}
-                onChange={p.onCountyFieldChange}
-              />
-              <span className="muted small">{p.countyCount ? `${p.countyCount} counties` : "loading counties"}</span>
+            <div className="row" style={{ flexWrap: "nowrap" }}>
+              <select value={p.colormapId} onChange={(e) => p.onColormapChange(e.target.value as ColormapChoiceId)} style={{ flex: "0 0 auto" }}>
+                {COLORMAP_CHOICES.map((c) => (<option key={c.id} value={c.id}>{c.label}</option>))}
+              </select>
+              <Ramp spriteUrl={colormapsPngUrl} rowCount={COLORMAP_ROW_COUNT} rowIndex={COLORMAP_INDEX[p.colormapId]!} label={fieldRampLabel} />
             </div>
-            {p.countyField === "ffwi" ? (
-              <select value={p.countyStat} onChange={(e) => p.onCountyStatChange(e.target.value as CountyStat)}>
-                <option value="share">share of the county's pixels with FFWI ≥ hide line</option>
-                <option value="mean">mean FFWI over the county</option>
-                <option value="max">max FFWI in the county</option>
-                <option value="hours">hours in the trailing window with FFWI ≥ hide line</option>
-              </select>
-            ) : null}
-            {p.countyField === "peak" ? (
-              <select value={p.peakMode} onChange={(e) => p.onPeakModeChange(e.target.value as PeakMode)}>
-                <option value="peak">hour when the county's mean FFWI peaks (whole 48 h, static)</option>
-                <option value="onset">first hour the county's mean FFWI reaches the hide line</option>
-              </select>
-            ) : null}
-            {p.countyField === "ffwi" && p.countyStat === "hours" ? (
-              <Field label={`Trailing window: ${p.windowHours} h (counts back to the run's +0 h at most)`}>
-                <Slider min={3} max={48} step={1} value={p.windowHours} onChange={p.onWindowHoursChange} label="Trailing window" onReset={() => p.onWindowHoursChange(12)} />
-              </Field>
-            ) : null}
+            <p className="muted small">{fieldRampLabel}</p>
+            <Field label={`Opacity ${Math.round(p.rasterOpacity * 100)}%`}>
+              <Slider min={0} max={1} step={0.01} value={p.rasterOpacity} onChange={p.onRasterOpacityChange} label="Field opacity" onReset={() => p.onRasterOpacityChange(0.7)} />
+            </Field>
           </>
         ) : null}
-        <div className="row" style={{ flexWrap: "nowrap" }}>
-          <select value={p.colormapId} onChange={(e) => p.onColormapChange(e.target.value as ColormapChoiceId)} style={{ flex: "0 0 auto" }}>
-            {COLORMAP_CHOICES.map((c) => (<option key={c.id} value={c.id}>{c.label}</option>))}
-          </select>
-          <Ramp spriteUrl={colormapsPngUrl} rowCount={COLORMAP_ROW_COUNT} rowIndex={COLORMAP_INDEX[p.colormapId]!} label={rampLabel} />
-        </div>
-        <p className="muted small">{rampLabel}</p>
-        <Field label={`Opacity ${Math.round(p.rasterOpacity * 100)}%`}>
-          <Slider min={0} max={1} step={0.01} value={p.rasterOpacity} onChange={p.onRasterOpacityChange} label="Layer opacity" onReset={() => p.onRasterOpacityChange(0.7)} />
-        </Field>
-        <Field label={p.hideBelow > 0 ? `Hide FFWI below ${p.hideBelow} (the map shows through; the county "share" threshold)` : "Showing every pixel"}>
+        <Field label={p.hideBelow > 0 ? `Hide below ${p.hideBelow} (the ground and the field both; the map shows through)` : "Showing every pixel"}>
           <Slider min={0} max={80} step={1} value={p.hideBelow} onChange={p.onHideBelowChange} label="Hide below" onReset={() => p.onHideBelowChange(20)} />
         </Field>
-        <Field label={`FFWI that counts as fully pushing (ramp top): ${p.rescaleMax}`}>
+        <Field label={`Ramp top (fully pushing): ${p.rescaleMax}`}>
           <Slider min={40} max={200} step={5} value={p.rescaleMax} onChange={p.onRescaleMaxChange} label="Rescale max" onReset={() => p.onRescaleMaxChange(100)} />
         </Field>
         <Field
@@ -413,7 +294,7 @@ export function ControlPanel(p: ControlPanelProps) {
                 Fosberg uses the equilibrium moisture the air implies right now. Real dead fuel lags behind it: the standard NFDRS
                 form is m(t) = m_eq(t) + (m(t-1) - m_eq(t)) x exp(-1/tau), with tau about 1 h for fine fuels and 10 h for the
                 10-hour class. With tau set, the moisture term carries that memory (seeded at the run's +0 h) and wind stays
-                instantaneous. The county stats, the raster and the tooltip all use the lagged value.
+                instantaneous. The ground, the field and the tooltip all use the lagged value.
               </Help>
             </span>
           }
@@ -424,21 +305,7 @@ export function ControlPanel(p: ControlPanelProps) {
           <option value="sustained">wind: 10 m sustained (standard FFWI)</option>
           <option value="gust">wind: gusts (higher; not comparable to FFWI tables)</option>
         </select>
-      </Fold>
-
-      <Fold k="land" label="The land (burn probability)">
-        <div className="row">
-          <select value={p.potentialId} onChange={(e) => p.onPotentialIdChange(e.target.value as PotentialLayerId)}>
-            {Object.values(POTENTIAL_LAYERS).map((l) => (<option key={l.id} value={l.id}>{l.label}</option>))}
-          </select>
-          <Help label="Potential layer">{pot.about} One CONUS-wide export, averaged per county and read under the cursor.</Help>
-        </div>
-        <Field label={`${pot.shortLabel} ramp top for the county map: ${pot.format(p.potentialNorm)}`}>
-          <Slider min={pot.sliderStep} max={pot.displayMax} step={pot.sliderStep} value={p.potentialNorm} onChange={p.onPotentialNormChange} label="BP normalization" onReset={() => p.onPotentialNormChange(pot.id === "bp" ? 0.02 : 5000)} />
-        </Field>
-        <p className="muted small">
-          {s.potentialLoading ? "fetching potential…" : s.potentialReady ? "potential live" : "potential not loaded"} · {s.tilesLoaded} / {s.tilesTotal} forecast tiles
-        </p>
+        <Check checked={p.showRaster} onChange={p.onShowRasterChange} label="Show the field" />
       </Fold>
 
       {s.error ? <p className="warn small" style={{ marginTop: 8 }}>{s.error}</p> : null}
