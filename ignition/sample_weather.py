@@ -9,7 +9,7 @@ before (max FFWI over the prior 24 h) and the 72 h precipitation. One weather ch
 data/ignition/weather_parts/<group>.parquet, so a rerun picks up where it stopped. Peak RAM under
 1 GB. About 5 s a group over the network.
 
-    uv run ignition/sample_weather.py [--limit N]
+    uv run ignition/sample_weather.py [--limit N] [--tag wide]   # --tag reads cases_<tag>.parquet, writes weather_<tag>.parquet
 """
 import argparse
 import sys
@@ -43,7 +43,11 @@ def ffwi(t_c, rh, wind_ms):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--tag", default="")
     a = ap.parse_args()
+    global CASES, PARTS, OUT
+    if a.tag:
+        CASES = CASES.with_name(f"cases_{a.tag}.parquet"); PARTS = PARTS.with_name(f"weather_parts_{a.tag}"); OUT = OUT.with_name(f"weather_{a.tag}.parquet")
     df = pd.read_parquet(CASES)
     PARTS.mkdir(parents=True, exist_ok=True)
     done = {int(p.stem) for p in PARTS.glob("*.parquet")}

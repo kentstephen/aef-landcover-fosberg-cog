@@ -9,7 +9,9 @@ index is a small range read first. For each point in the chunk: the 10 m pixel (
 and the unit-normalized mean of the 15 x 15 window (150 m) around it. Parts written per chunk to
 data/ignition/emb_parts/, resumable. Peak RAM well under 1 GB.
 
-    uv run ignition/sample_embeddings.py [--limit N]
+    uv run ignition/sample_embeddings.py [--limit N] [--tag wide] [--back 1]
+    --tag reads cases_<tag>.parquet; --back N reads the embedding N more years before emb_year
+    (the trajectory), parts and output get the suffix _b<N>.
 """
 import argparse
 import sys
@@ -39,10 +41,18 @@ def dequant(q):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--limit", type=int, default=0)
+    ap.add_argument("--tag", default="")
+    ap.add_argument("--back", type=int, default=0)
     a = ap.parse_args()
+    global CASES, PARTS, OUT
+    suffix = (f"_{a.tag}" if a.tag else "") + (f"_b{a.back}" if a.back else "")
+    if a.tag: CASES = CASES.with_name(f"cases_{a.tag}.parquet")
+    PARTS = PARTS.with_name(f"emb_parts{suffix}"); OUT = OUT.with_name(f"embeddings{suffix}.parquet")
     df = pd.read_parquet(CASES)
-    pts = df[df.kind.isin(["case", "s_ctrl"])].copy()
-    pts["pkey"] = pts.mchunk.astype(str) + "_" + pts.emb_year.astype(str)
+    pts = df[(df.kind == "case") | df.kind.str.startswith("s")].copy()
+    pts["yr"] = pts.emb_year - a.back
+    pts = pts[pts.yr >= YEAR0]
+    pts["pkey"] = pts.mchunk.astype(str) + "_" + pts.yr.astype(str)
     PARTS.mkdir(parents=True, exist_ok=True)
     done = {p.stem for p in PARTS.glob("*.parquet")}
     keys = [k for k in pts.pkey.unique() if k not in done]
@@ -58,7 +68,7 @@ def main():
         rows = pts[pts.pkey == k]
         cx0 = int(rows.mx.iloc[0] // CHUNK) * CHUNK
         cy0 = int(rows.my.iloc[0] // CHUNK) * CHUNK
-        ti = int(rows.emb_year.iloc[0]) - YEAR0
+        ti = int(rows.yr.iloc[0]) - YEAR0
         t1 = time.time()
         block = arr[ti, :, cy0:cy0 + CHUNK, cx0:cx0 + CHUNK]  # (64, 256, 256) int8
         nbytes += block.nbytes

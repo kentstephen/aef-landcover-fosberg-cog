@@ -9,6 +9,7 @@ COG open per year, windows read point by point (a 512 px block each, Byte). Peak
 
     uv run ignition/sample_nlcd.py
 """
+import argparse
 import sys
 import time
 from pathlib import Path
@@ -29,8 +30,14 @@ HALF = 2
 
 
 def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--tag", default="")
+    a = ap.parse_args()
+    global CASES, OUT
+    if a.tag:
+        CASES = CASES.with_name(f"cases_{a.tag}.parquet"); OUT = OUT.with_name(f"nlcd_{a.tag}.parquet")
     df = pd.read_parquet(CASES)
-    pts = df[df.kind.isin(["case", "s_ctrl"])]
+    pts = df[(df.kind == "case") | df.kind.str.startswith("s")]
     out = []
     t0 = time.time()
     with Env(GDAL_DISABLE_READDIR_ON_OPEN="EMPTY_DIR", GDAL_HTTP_MULTIPLEX="YES", CPL_VSIL_CURL_CACHE_SIZE=200_000_000):
