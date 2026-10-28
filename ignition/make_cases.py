@@ -121,6 +121,9 @@ def main():
     df["hx"], df["hy"] = hx, hy
     df = df[(hx >= 0) & (hx < W) & (hy >= 0) & (hy < H)].copy()
     df["ti"] = ((df.time - T0) / pd.Timedelta("1h")).astype(int)
+    # the HRRR analysis store ends at the present: keep to complete 90-day blocks, so every control hour exists
+    t_end = int((pd.Timestamp.now(tz="UTC") - T0) / pd.Timedelta("1h")) // CHUNK_T * CHUNK_T
+    df = df[df.ti < t_end]
     df["cx"], df["cy"], df["ct"] = df.hx // CHUNK_XY, df.hy // CHUNK_XY, df.ti // CHUNK_T
     df["group"] = df.ct * 100000 + df.cy * 100 + df.cx
     print(f"eligible cases: {len(df)} ({(df.FireCause == 'Natural').sum()} natural, {(df.FireCause == 'Human').sum()} human), {df.group.nunique()} weather groups")

@@ -67,8 +67,12 @@ def _group(job):
     f = ffwi(t, rh, w)
     fg = ffwi(t, rh, gu)
     out = []
+    nt = t.shape[0]
     for k in range(len(rows)):
         i, y, x = li[k], ly[k], lx[k]
+        if i >= nt:  # an hour the store does not have yet
+            out.append(dict(row=int(rows.index[k]), hours_in_block=int(i)))
+            continue
         lo = max(0, i - 24)
         lo72 = max(0, i - 72)
         out.append(dict(
