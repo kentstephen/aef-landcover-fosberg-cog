@@ -82,7 +82,15 @@ export const CANOPY = fold(canopyJson as HeadJson);
 export type IgnitionJson = HeadJson & { weather: string[] };
 export const IGN_LO = -6;
 export const IGN_HI = 6;
-export type IgnitionHead = { w: Float32Array; bias: number; weather: string[]; wc: number[]; wm: number[] };
+export type IgnitionHead = {
+  w: Float32Array;
+  bias: number;
+  weather: string[];
+  wc: number[];
+  wm: number[];
+  /** The weather part folded to a * x + b per input (0 where the head has no such input). */
+  aFfwi: number; aT: number; aRh: number; aWind: number; wBias: number;
+};
 
 function foldIgnition(m: IgnitionJson): IgnitionHead {
   const w = new Float32Array(NUM_BANDS);
@@ -94,16 +102,20 @@ function foldIgnition(m: IgnitionJson): IgnitionHead {
   }
   const wc = m.weather.map((_, j) => m.coef[0]![NUM_BANDS + j]! / m.scale[NUM_BANDS + j]!);
   const wm = m.weather.map((_, j) => m.mean[NUM_BANDS + j]!);
-  return { w, bias, weather: m.weather, wc, wm };
+  const a: Record<string, number> = { ffwi: 0, t_c: 0, rh: 0, wind_ms: 0 };
+  let wBias = 0;
+  m.weather.forEach((name, j) => {
+    a[name] = wc[j]!;
+    wBias -= wc[j]! * wm[j]!;
+  });
+  return { w, bias, weather: m.weather, wc, wm, aFfwi: a.ffwi!, aT: a.t_c!, aRh: a.rh!, aWind: a.wind_ms!, wBias };
 }
 export const IGNITION = foldIgnition(ignitionJson as IgnitionJson);
 
 /** The weather part of the ignition logit for one hour (wind sustained, m/s; FFWI as the map computes it). */
 export function ignitionWeather(ffwi: number, tc: number, rh: number, windMs: number): number {
-  const vals: Record<string, number> = { ffwi, t_c: tc, rh, wind_ms: windMs };
-  let z = 0;
-  for (let j = 0; j < IGNITION.weather.length; j++) z += IGNITION.wc[j]! * ((vals[IGNITION.weather[j]!] ?? 0) - IGNITION.wm[j]!);
-  return z;
+  const h = IGNITION;
+  return h.aFfwi * ffwi + h.aT * tc + h.aRh * rh + h.aWind * windMs + h.wBias;
 }
 
 export function ignByte(logit: number): number {

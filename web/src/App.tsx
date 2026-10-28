@@ -12,7 +12,7 @@ import type { MapRef } from "react-map-gl/maplibre";
 import { Map as MaplibreMap } from "react-map-gl/maplibre";
 import type * as zarr from "zarrita";
 import { fuelOf } from "./aef/fuel.js";
-import { fireLayers, firesInRun, loadFires, type Fires } from "./fires.js";
+// import { fireLayers, firesInRun, loadFires, type Fires } from "./fires.js";
 import { HEADS, NO_CLASS, type Teacher } from "./aef/head.js";
 import { AefLayers } from "./aef/layers.js";
 import { type AefArray, openAefMosaic } from "./aef/mosaic.js";
@@ -123,17 +123,12 @@ export default function App() {
       .catch((e) => { if (!gone) setError(`AEF mosaic: ${String(e)}`); });
     return () => { gone = true; };
   }, []);
-  // ---- the real ignitions (every WFIGS wildfire; the run's window is picked out per run)
-  const [fires, setFires] = useState<Fires | null>(null);
-  useEffect(() => {
-    let gone = false;
-    loadFires(import.meta.env.BASE_URL)
-      .then((f) => { if (!gone) setFires(f); })
-      .catch((e) => { if (!gone) setError(`fires: ${String(e)}`); });
-    return () => { gone = true; };
-  }, []);
-  const [showFires, setShowFires] = useState(true);
-  const fireList = useMemo(() => (fires && source ? firesInRun(fires, dateFromInitTimeIdx(initTimeIdx)) : []), [fires, source, initTimeIdx]);
+  // the real ignitions as points over the ground (fires.ts, fires.bin): not drawn; the picture is the
+  // ground and the weather
+  // const [fires, setFires] = useState<Fires | null>(null);
+  // useEffect(() => { loadFires(import.meta.env.BASE_URL).then(setFires).catch((e) => setError(`fires: ${String(e)}`)); }, []);
+  // const [showFires, setShowFires] = useState(true);
+  // const fireList = useMemo(() => (fires && source ? firesInRun(fires, dateFromInitTimeIdx(initTimeIdx)) : []), [fires, source, initTimeIdx]);
   const [aefVersion, setAefVersion] = useState(0);
   const needWeatherRef = useRef<(px: Int16Array, py: Int16Array) => void>(() => {});
   const aefLayers = useMemo(() => {
@@ -224,7 +219,8 @@ export default function App() {
   const [grain, setGrain] = useState(0);
   /** The ground drawn as light (additive) rather than paint. */
   const [light, setLight] = useState(false);
-  const [relief, setRelief] = useState(true);
+  // relief (AWS Terrarium hillshade) under the ground: off, it only makes the ground harder to read
+  const [relief, setRelief] = useState(false);
   /** Contours of the FFWI field over the ground (0 = none). */
   const [contourStep, setContourStep] = useState(0);
   const [zoom, setZoom] = useState(START_VIEW.zoom);
@@ -371,9 +367,7 @@ export default function App() {
         }),
       );
     }
-    if (fireList.length > 0) {
-      out.push(...fireLayers({ fires: fireList, initTime: dateFromInitTimeIdx(initTimeIdx), leadHours: leadTimeIdx, visible: showFires, beforeId: BEFORE_ID }));
-    }
+    // if (fireList.length > 0) out.push(...fireLayers({ fires: fireList, initTime: dateFromInitTimeIdx(initTimeIdx), leadHours: leadTimeIdx, visible: showFires, beforeId: BEFORE_ID }));
     if (contourLines.length > 0) {
       out.push(
         new PathLayer<ContourPath>({
@@ -396,7 +390,7 @@ export default function App() {
   }, [
     showRaster, source, getTileData, colormapTexture, initTimeIdx, windMode, rasterVariable, selection, renderTile, rasterOpacity,
     leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity, zoom,
-    glowHours, grain, light, contourLines, pHide, pMax, fireList, showFires,
+    glowHours, grain, light, contourLines, pHide, pMax,
   ]);
 
   const status: Status = {
@@ -498,10 +492,7 @@ export default function App() {
         onPHideChange={setPHide}
         pMax={pMax}
         onPMaxChange={setPMax}
-        showFires={showFires}
-        onShowFiresChange={setShowFires}
-        fireCount={fireList.length}
-        fireNatural={fireList.filter((f) => f.cause === 1).length}
+
         teacher={teacher}
         onTeacherChange={setTeacher}
         fuelOpacity={fuelOpacity}

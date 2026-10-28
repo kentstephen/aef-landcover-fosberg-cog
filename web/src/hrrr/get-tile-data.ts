@@ -32,13 +32,14 @@ export type MakeGetTileDataArgs = {
   initTimeIdx: number;
 };
 
-/** IEEE half-float bits for a float32 (round-to-nearest-even; NaN/Inf preserved). */
+const halfF = new Float32Array(1);
+const halfI = new Uint32Array(halfF.buffer);
+
+/** IEEE half-float bits for a float32 (round-to-nearest-even; NaN/Inf preserved). Called per texel: no allocation. */
 export function toHalf(x: number): number {
   if (Number.isNaN(x)) return 0x7e00;
-  const f = new Float32Array(1);
-  const i = new Uint32Array(f.buffer);
-  f[0] = x;
-  const b = i[0]!;
+  halfF[0] = x;
+  const b = halfI[0]!;
   const sign = (b >>> 16) & 0x8000;
   let exp = ((b >>> 23) & 0xff) - 127 + 15;
   let mant = b & 0x7fffff;

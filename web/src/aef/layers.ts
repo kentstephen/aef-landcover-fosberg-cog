@@ -14,7 +14,7 @@ import { type AefArray, MOSAIC_MIN_ZOOM, RES, X0, Y0, YEAR_IDX_2025 } from "./mo
 import type { AefPool } from "./pool.js";
 import { rampTexture } from "./ramp.js";
 import { fuelPipeline, type FuelMode } from "./render.js";
-import { makeGrid, type WeatherGrid, weatherTexture } from "./weather.js";
+import { makeGrid, type WeatherGrid, type WeatherKind, weatherTexture } from "./weather.js";
 import { ignLogit } from "./head.js";
 
 /**
@@ -37,9 +37,13 @@ export type AefTile = {
   /** The ignition ground logit plane. */
   groundTex: Texture;
   grid: WeatherGrid;
+  /** Per node and lead: the FFWI, or in ignition mode the weather part of the ignition logit. */
   ffwiTex: Texture;
-  /** The weather part of the ignition logit, per node and lead. */
-  ignTex: Texture;
+  weatherKind: WeatherKind;
+  /** Every node had weather when the texture was built (nothing to rebuild for a new shard). */
+  weatherComplete: boolean;
+  /** The fuel lag the texture was built with. */
+  weatherTau: number;
   bbox: [number, number, number, number];
   /** Tile width in ground meters. */
   extentM: number;
@@ -104,6 +108,7 @@ export class AefLayers {
   private opts: AefLayerOpts | null = null;
   private version = 0;
   private lastKey = "";
+  private weatherKind: WeatherKind = "ignition";
 
   constructor(
     private pool: AefPool,
@@ -125,15 +130,26 @@ export class AefLayers {
     return { ramp: this.ramp, luts: this.luts };
   }
 
-  /** The weather changed (a shard arrived, the fuel lag moved): every tile's weather texture anew. */
+  /**
+   * The weather changed (a shard arrived, the fuel lag moved, the kind switched): the weather texture anew
+   * for the tiles it concerns. A tile whose nodes all had weather, at this lag and kind, keeps its texture:
+   * a shard arriving elsewhere does not touch it, so the main thread is not held for every tile on every shard.
+   */
   refreshWeather() {
     if (!this.device) return;
+    let changed = 0;
     for (const t of this.live.values()) {
-      const old = [t.ffwiTex, t.ignTex];
-      t.ffwiTex = weatherTexture(this.device, t.grid, this.cache);
-      t.ignTex = weatherTexture(this.device, t.grid, this.cache, "ignition");
-      later(...old);
+      if (t.weatherComplete && t.weatherTau === this.cache.tau && t.weatherKind === this.weatherKind) continue;
+      const old = t.ffwiTex;
+      const w = weatherTexture(this.device, t.grid, this.cache, this.weatherKind);
+      t.ffwiTex = w.tex;
+      t.weatherComplete = w.complete;
+      t.weatherTau = this.cache.tau;
+      t.weatherKind = this.weatherKind;
+      later(old);
+      changed++;
     }
+    if (changed === 0) return;
     this.version++;
     this.redraw();
   }
@@ -160,6 +176,7 @@ export class AefLayers {
         sampler: { minFilter: "nearest", magFilter: "nearest", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" },
       });
     const grid = makeGrid(extentM, toLonLat);
+    const w = weatherTexture(device, grid, this.cache, this.weatherKind);
     const corners = [toLonLat(0, 0), toLonLat(1, 0), toLonLat(0, 1), toLonLat(1, 1)];
     const bbox: AefTile["bbox"] = [
       Math.min(...corners.map((c) => c[0])), Math.min(...corners.map((c) => c[1])),
@@ -167,13 +184,15 @@ export class AefLayers {
     ];
     const t: AefTile = {
       key, kind, width, height,
-      byteLength: 4 * width * height + 4 * 49 * grid.cols * grid.rows,
+      byteLength: 4 * width * height + 2 * 49 * grid.cols * grid.rows,
       classes,
       classTex: { nlcd: tex(classes.nlcd), esri: tex(classes.esri) },
       groundTex: tex(classes.ign),
       grid,
-      ffwiTex: weatherTexture(device, grid, this.cache),
-      ignTex: weatherTexture(device, grid, this.cache, "ignition"),
+      ffwiTex: w.tex,
+      weatherKind: this.weatherKind,
+      weatherComplete: w.complete,
+      weatherTau: this.cache.tau,
       bbox,
       extentM,
       pixelAt,
@@ -188,7 +207,7 @@ export class AefLayers {
   private drop(t: AefTile) {
     t.gone = true;
     if (this.live.get(t.key) === t) this.live.delete(t.key);
-    later(t.classTex.nlcd, t.classTex.esri, t.groundTex, t.ffwiTex, t.ignTex);
+    later(t.classTex.nlcd, t.classTex.esri, t.groundTex, t.ffwiTex);
   }
 
   private async read<T>(f: () => Promise<T>): Promise<T> {
@@ -249,7 +268,7 @@ export class AefLayers {
     return fuelPipeline({
       classTex: d.classTex[o.teacher],
       groundTex: d.groundTex,
-      ffwiTex: o.mode === "ignition" ? d.ignTex : d.ffwiTex,
+      ffwiTex: d.ffwiTex,
       lutTex: luts[o.teacher],
       rampTex: ramp,
       mode: o.mode === "ignition" ? 2 : o.mode === "cover" ? 1 : 0,
@@ -269,6 +288,11 @@ export class AefLayers {
 
   layers(opts: AefLayerOpts): Layer[] {
     this.opts = opts;
+    const kind: WeatherKind = opts.mode === "ignition" ? "ignition" : "ffwi";
+    if (kind !== this.weatherKind) {
+      this.weatherKind = kind;
+      this.refreshWeather();
+    }
     // debug hook for the headless probe (this instance is the one deck draws from)
     (globalThis as unknown as { __aef?: unknown }).__aef = { layers: this, cache: this.cache };
     const key = `${opts.mode}|${opts.teacher}|${opts.leadTimeIdx}|${opts.hideBelow}|${opts.rescaleMax}|${opts.pHide}|${opts.pMax}|${opts.glowHours}|${opts.grain}`;

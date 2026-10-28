@@ -88,11 +88,7 @@ export type ControlPanelProps = {
   onPHideChange: (v: number) => void;
   pMax: number;
   onPMaxChange: (v: number) => void;
-  showFires: boolean;
-  onShowFiresChange: (v: boolean) => void;
-  /** Fires discovered in the run's window (24 h before +0 to +48 h), and how many of them are natural. */
-  fireCount: number;
-  fireNatural: number;
+
   teacher: Teacher;
   onTeacherChange: (t: Teacher) => void;
   fuelOpacity: number;
@@ -172,8 +168,7 @@ export function ControlPanel(p: ControlPanelProps) {
         Every pixel's <b>AlphaEarth embedding</b> goes through a small head fit on 22,000 real wildfire ignitions (WFIGS, 2019
         to 2026) against points 20 to 30 km away at other hours, together with the hour's weather from NOAA's HRRR
         forecast (Fosberg index, temperature, humidity, wind). The map shows the head's ignition probability hour by hour:
-        invisible where it is low, viridis as it climbs. The orange points are the fires that actually started in this run's
-        window, each lit at its discovery hour (rings are lightning fires, dots human or unknown; bigger means more acres).
+        invisible where it is low, viridis as it climbs.
       </p>
       <p className="muted small" style={{ marginTop: 6 }}>
         Data: <A href="https://source.coop/tge-labs/aef">AlphaEarth Foundations 2025</A> (tge-labs on Source Cooperative) ·{" "}
@@ -221,9 +216,6 @@ export function ControlPanel(p: ControlPanelProps) {
             <Field label={`Ramp top ${Math.round(p.pMax * 100)}%`}>
               <Slider min={0.5} max={1} step={0.01} value={p.pMax} onChange={p.onPMaxChange} label="Ramp top" onReset={() => p.onPMaxChange(0.95)} />
             </Field>
-            <div className="row">
-              <Check checked={p.showFires} onChange={p.onShowFiresChange} label={`The fires that started: ${p.fireCount} in this window (${p.fireNatural} lightning)`} />
-            </div>
           </>
         ) : (
           <div className="row">
@@ -258,7 +250,7 @@ export function ControlPanel(p: ControlPanelProps) {
         </Field>
         <div className="row">
           <Check checked={p.light} onChange={p.onLightChange} label="Draw as light (adds up over the map)" />
-          <Check checked={p.relief} onChange={p.onReliefChange} label="Relief under the ground" />
+          {/* <Check checked={p.relief} onChange={p.onReliefChange} label="Relief under the ground" /> */}
         </div>
         {/* class legend with fuel weights, not shown while the classes themselves are not drawn
         <div className="legend">
