@@ -2,17 +2,24 @@ import type { RenderTileResult } from "@developmentseed/deck.gl-raster";
 import type { Texture } from "@luma.gl/core";
 import type { ShaderModule } from "@luma.gl/shadertools";
 import { HOLD_SCALE } from "./fuel.js";
+import { IGN_HI, IGN_LO } from "./head.js";
 
-/** What the land cover layer draws. */
-export type FuelMode = "lit" | "cover";
+/** What the ground layer draws: land cover lit by FFWI, the classes, or the ignition head. */
+export type FuelMode = "lit" | "cover" | "ignition";
 
 export type FuelLightProps = {
   classTex: Texture;
+  /** The ignition ground logit per pixel (a byte over IGN_LO..IGN_HI). */
+  groundTex: Texture;
+  /** Per node and lead: the FFWI (modes 0, 1) or the weather part of the ignition logit (mode 2). */
   ffwiTex: Texture;
   lutTex: Texture;
   rampTex: Texture;
-  /** 0 = lit by the hour's FFWI, 1 = land cover classes. */
+  /** 0 = lit by the hour's FFWI, 1 = land cover classes, 2 = ignition probability. */
   mode: number;
+  /** Ignition mode: hidden below this probability, ramp top at pMax. */
+  pHide: number;
+  pMax: number;
   layerIndex: number;
   hideBelow: number;
   rescaleMax: number;
@@ -44,12 +51,15 @@ uniform ${MODULE_NAME}Uniforms {
   float rescaleMax;
   float glowHours;
   float grain;
+  float pHide;
+  float pMax;
 } ${MODULE_NAME};
 `,
   inject: {
     "fs:#decl": `
 precision highp sampler2DArray;
 uniform sampler2D classTex;
+uniform sampler2D groundTex;
 uniform sampler2DArray ffwiTex;
 uniform sampler2D lutTex;
 uniform sampler2D rampTex;
@@ -64,7 +74,33 @@ float fuelHash(vec2 p) {
       float ci = texture(classTex, geometry.uv).r * 255.0;
       if (ci > 254.5) discard;
       vec4 lut = texelFetch(lutTex, ivec2(int(ci + 0.5), 0), 0);
-      if (${MODULE_NAME}.mode > 0.5) {
+      if (${MODULE_NAME}.mode > 1.5) {
+        // the ignition head: ground logit (per pixel) plus the hour's weather logit (per node), sigmoid;
+        // with the afterglow on, the brightest of the hours behind, each losing 0.3 logit per hour
+        float g = texture(groundTex, geometry.uv).r * ${IGN_HI - IGN_LO}.0 + (${IGN_LO}.0);
+        float wl = texture(ffwiTex, vec3(geometry.uv, ${MODULE_NAME}.layerIndex)).r;
+        float z = isnan(wl) ? -99.0 : g + wl;
+        int back = int(min(${MODULE_NAME}.glowHours, 48.0));
+        for (int k = 1; k <= 48; k++) {
+          if (k > back) break;
+          float l = ${MODULE_NAME}.layerIndex - float(k);
+          if (l < 0.0) break;
+          float wk = texture(ffwiTex, vec3(geometry.uv, l)).r;
+          if (isnan(wk)) continue;
+          z = max(z, g + wk - 0.3 * float(k));
+        }
+        float pr = 1.0 / (1.0 + exp(-z));
+        if (pr < ${MODULE_NAME}.pHide) discard;
+        float t = clamp((pr - ${MODULE_NAME}.pHide) / max(${MODULE_NAME}.pMax - ${MODULE_NAME}.pHide, 0.01), 0.0, 1.0);
+        float a = min(1.0, t / 0.15);
+        if (${MODULE_NAME}.grain > 0.0) {
+          vec2 cell = floor(geometry.uv * ${MODULE_NAME}.grain);
+          float h = fuelHash(cell + vec2(0.37, 0.91));
+          a *= smoothstep(h - 0.08, h + 0.08, 0.1 + 0.9 * t);
+          if (a < 0.01) discard;
+        }
+        color = vec4(texture(rampTex, vec2(t, 0.5)).rgb, a);
+      } else if (${MODULE_NAME}.mode > 0.5) {
         color = vec4(lut.rgb, 1.0);
       } else {
         float f = texture(ffwiTex, vec3(geometry.uv, ${MODULE_NAME}.layerIndex)).r;
@@ -96,7 +132,7 @@ float fuelHash(vec2 p) {
       }
     `,
   },
-  uniformTypes: { mode: "f32", layerIndex: "f32", hideBelow: "f32", rescaleMax: "f32", glowHours: "f32", grain: "f32" },
+  uniformTypes: { mode: "f32", layerIndex: "f32", hideBelow: "f32", rescaleMax: "f32", glowHours: "f32", grain: "f32", pHide: "f32", pMax: "f32" },
   getUniforms: (p: Partial<FuelLightProps>) => ({
     mode: p.mode ?? 0,
     layerIndex: p.layerIndex ?? 0,
@@ -104,7 +140,10 @@ float fuelHash(vec2 p) {
     rescaleMax: p.rescaleMax ?? 100,
     glowHours: p.glowHours ?? 0,
     grain: p.grain ?? 0,
+    pHide: p.pHide ?? 0.5,
+    pMax: p.pMax ?? 0.95,
     classTex: p.classTex,
+    groundTex: p.groundTex,
     ffwiTex: p.ffwiTex,
     lutTex: p.lutTex,
     rampTex: p.rampTex,

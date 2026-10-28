@@ -15,6 +15,7 @@ import type { AefPool } from "./pool.js";
 import { rampTexture } from "./ramp.js";
 import { fuelPipeline, type FuelMode } from "./render.js";
 import { makeGrid, type WeatherGrid, weatherTexture } from "./weather.js";
+import { ignLogit } from "./head.js";
 
 /**
  * The land cover under the weather, two readers by zoom with the same head and the same shader:
@@ -33,8 +34,12 @@ export type AefTile = {
   byteLength: number;
   classes: Classified;
   classTex: Record<Teacher, Texture>;
+  /** The ignition ground logit plane. */
+  groundTex: Texture;
   grid: WeatherGrid;
   ffwiTex: Texture;
+  /** The weather part of the ignition logit, per node and lead. */
+  ignTex: Texture;
   bbox: [number, number, number, number];
   /** Tile width in ground meters. */
   extentM: number;
@@ -51,6 +56,9 @@ export type AefLayerOpts = {
   leadTimeIdx: number;
   hideBelow: number;
   rescaleMax: number;
+  /** Ignition mode: hidden below this probability, ramp top at pMax. */
+  pHide: number;
+  pMax: number;
   /** Hours of afterglow (0 = this hour only). */
   glowHours: number;
   /** Grain cells across a tile (0 = flat fill). */
@@ -121,9 +129,10 @@ export class AefLayers {
   refreshWeather() {
     if (!this.device) return;
     for (const t of this.live.values()) {
-      const old = t.ffwiTex;
+      const old = [t.ffwiTex, t.ignTex];
       t.ffwiTex = weatherTexture(this.device, t.grid, this.cache);
-      later(old);
+      t.ignTex = weatherTexture(this.device, t.grid, this.cache, "ignition");
+      later(...old);
     }
     this.version++;
     this.redraw();
@@ -158,11 +167,13 @@ export class AefLayers {
     ];
     const t: AefTile = {
       key, kind, width, height,
-      byteLength: 3 * width * height + 2 * 49 * grid.cols * grid.rows,
+      byteLength: 4 * width * height + 4 * 49 * grid.cols * grid.rows,
       classes,
       classTex: { nlcd: tex(classes.nlcd), esri: tex(classes.esri) },
+      groundTex: tex(classes.ign),
       grid,
       ffwiTex: weatherTexture(device, grid, this.cache),
+      ignTex: weatherTexture(device, grid, this.cache, "ignition"),
       bbox,
       extentM,
       pixelAt,
@@ -177,7 +188,7 @@ export class AefLayers {
   private drop(t: AefTile) {
     t.gone = true;
     if (this.live.get(t.key) === t) this.live.delete(t.key);
-    later(t.classTex.nlcd, t.classTex.esri, t.ffwiTex);
+    later(t.classTex.nlcd, t.classTex.esri, t.groundTex, t.ffwiTex, t.ignTex);
   }
 
   private async read<T>(f: () => Promise<T>): Promise<T> {
@@ -237,13 +248,16 @@ export class AefLayers {
     const { ramp, luts } = this.textures(this.device);
     return fuelPipeline({
       classTex: d.classTex[o.teacher],
-      ffwiTex: d.ffwiTex,
+      groundTex: d.groundTex,
+      ffwiTex: o.mode === "ignition" ? d.ignTex : d.ffwiTex,
       lutTex: luts[o.teacher],
       rampTex: ramp,
-      mode: o.mode === "cover" ? 1 : 0,
+      mode: o.mode === "ignition" ? 2 : o.mode === "cover" ? 1 : 0,
       layerIndex: o.leadTimeIdx,
       hideBelow: o.hideBelow,
       rescaleMax: o.rescaleMax,
+      pHide: o.pHide,
+      pMax: o.pMax,
       glowHours: o.glowHours,
       grain: o.grain,
     });
@@ -257,7 +271,7 @@ export class AefLayers {
     this.opts = opts;
     // debug hook for the headless probe (this instance is the one deck draws from)
     (globalThis as unknown as { __aef?: unknown }).__aef = { layers: this, cache: this.cache };
-    const key = `${opts.mode}|${opts.teacher}|${opts.leadTimeIdx}|${opts.hideBelow}|${opts.rescaleMax}|${opts.glowHours}|${opts.grain}`;
+    const key = `${opts.mode}|${opts.teacher}|${opts.leadTimeIdx}|${opts.hideBelow}|${opts.rescaleMax}|${opts.pHide}|${opts.pMax}|${opts.glowHours}|${opts.grain}`;
     if (key !== this.lastKey) {
       this.lastKey = key;
       this.version++;
@@ -270,7 +284,7 @@ export class AefLayers {
       updateTriggers: { renderTile: [v] },
       onTileUnload: this.onUnload,
       beforeId: opts.beforeId,
-      parameters: opts.light && opts.mode === "lit"
+      parameters: opts.light && opts.mode !== "cover"
         ? { blend: true, blendColorOperation: "add", blendColorSrcFactor: "src-alpha", blendColorDstFactor: "one", blendAlphaOperation: "add", blendAlphaSrcFactor: "one", blendAlphaDstFactor: "one-minus-src-alpha" }
         : {},
     };
@@ -299,7 +313,7 @@ export class AefLayers {
   }
 
   /** The classes under a lon/lat from the tiles on hand (the finer reader first), or null. */
-  at(lon: number, lat: number): { tile: AefTile; nlcd: number; esri: number; cover: number } | null {
+  at(lon: number, lat: number): { tile: AefTile; nlcd: number; esri: number; cover: number; ign: number } | null {
     let best: { tile: AefTile; i: number } | null = null;
     for (const t of this.live.values()) {
       const [w, s, e, n] = t.bbox;
@@ -310,6 +324,6 @@ export class AefLayers {
     }
     if (!best) return null;
     const { tile, i } = best;
-    return { tile, nlcd: tile.classes.nlcd[i]!, esri: tile.classes.esri[i]!, cover: tile.classes.cover[i]! / 255 };
+    return { tile, nlcd: tile.classes.nlcd[i]!, esri: tile.classes.esri[i]!, cover: tile.classes.cover[i]! / 255, ign: ignLogit(tile.classes.ign[i]!) };
   }
 }

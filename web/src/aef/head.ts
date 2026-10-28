@@ -1,4 +1,5 @@
 import canopyJson from "../../../models/canopy_ridge.json";
+import ignitionJson from "../../../models/ignition_logit.json";
 import esriJson from "../../../models/landcover_esri_logit.json";
 import nlcdJson from "../../../models/landcover_nlcd_logit.json";
 
@@ -71,7 +72,49 @@ export const HEADS: Record<Teacher, ClassHead> = {
 /** Ridge: cover 0..1, mean height m, p95 height m. Only cover is used on the map. */
 export const CANOPY = fold(canopyJson as HeadJson);
 
-export type Classified = { nlcd: Uint8Array; esri: Uint8Array; cover: Uint8Array };
+/**
+ * The ignition head (ignition/export_head.py): one logistic head on the pixel embedding plus the
+ * hour's weather, fit on WFIGS ignitions against points 20 to 30 km away at another hour. The ground
+ * part (64 bands, with the intercept) is folded here and stored per pixel as a byte over IGN_LO..IGN_HI
+ * in logit units; the weather part is added per hour from the HRRR cache (tile-cache.ts). Logit in,
+ * sigmoid out: the probability that this pixel at this hour is an ignition rather than a control.
+ */
+export type IgnitionJson = HeadJson & { weather: string[] };
+export const IGN_LO = -6;
+export const IGN_HI = 6;
+export type IgnitionHead = { w: Float32Array; bias: number; weather: string[]; wc: number[]; wm: number[] };
+
+function foldIgnition(m: IgnitionJson): IgnitionHead {
+  const w = new Float32Array(NUM_BANDS);
+  let bias = m.intercept[0]!;
+  for (let i = 0; i < NUM_BANDS; i++) {
+    const c = m.coef[0]![i]! / m.scale[i]!;
+    w[i] = c;
+    bias -= c * m.mean[i]!;
+  }
+  const wc = m.weather.map((_, j) => m.coef[0]![NUM_BANDS + j]! / m.scale[NUM_BANDS + j]!);
+  const wm = m.weather.map((_, j) => m.mean[NUM_BANDS + j]!);
+  return { w, bias, weather: m.weather, wc, wm };
+}
+export const IGNITION = foldIgnition(ignitionJson as IgnitionJson);
+
+/** The weather part of the ignition logit for one hour (wind sustained, m/s; FFWI as the map computes it). */
+export function ignitionWeather(ffwi: number, tc: number, rh: number, windMs: number): number {
+  const vals: Record<string, number> = { ffwi, t_c: tc, rh, wind_ms: windMs };
+  let z = 0;
+  for (let j = 0; j < IGNITION.weather.length; j++) z += IGNITION.wc[j]! * ((vals[IGNITION.weather[j]!] ?? 0) - IGNITION.wm[j]!);
+  return z;
+}
+
+export function ignByte(logit: number): number {
+  return Math.round(Math.min(1, Math.max(0, (logit - IGN_LO) / (IGN_HI - IGN_LO))) * 255);
+}
+export function ignLogit(byte: number): number {
+  return IGN_LO + (byte / 255) * (IGN_HI - IGN_LO);
+}
+
+/** The planes per pixel: two class indices, canopy cover 0..255, and the ignition ground logit as a byte. */
+export type Classified = { nlcd: Uint8Array; esri: Uint8Array; cover: Uint8Array; ign: Uint8Array };
 
 /**
  * Every pixel of a band-major int8 block [64, n] through the three heads. Argmax of the logits is
@@ -82,6 +125,7 @@ export function classify(data: Int8Array, n: number): Classified {
   const nlcd = new Uint8Array(n);
   const esri = new Uint8Array(n);
   const cover = new Uint8Array(n);
+  const ign = new Uint8Array(n);
   const x = new Float32Array(NUM_BANDS);
   const hn = HEADS.nlcd.folded;
   const he = HEADS.esri.folded;
@@ -110,8 +154,9 @@ export function classify(data: Int8Array, n: number): Classified {
     esri[p] = argmax(he, x);
     const c = dot(CANOPY.w, 0, x) + CANOPY.b[0]!;
     cover[p] = Math.round(Math.min(1, Math.max(0, c)) * 255);
+    ign[p] = ignByte(dot(IGNITION.w, 0, x) + IGNITION.bias);
   }
-  return { nlcd, esri, cover };
+  return { nlcd, esri, cover, ign };
 }
 
 function dot(w: Float32Array, j: number, x: Float32Array): number {

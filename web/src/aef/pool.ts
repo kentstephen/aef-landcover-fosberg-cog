@@ -13,14 +13,14 @@ export class AefPool {
     this.ws = Array.from({ length: size }, () => {
       const w = new Worker(new URL("./aef.worker.ts", import.meta.url), { type: "module" });
       const ent: W = { w, busy: 0, waiting: new Map() };
-      w.onmessage = (ev: MessageEvent<{ id: number; error?: { name: string; message: string }; nlcd?: Uint8Array; esri?: Uint8Array; cover?: Uint8Array }>) => {
-        const { id, error, nlcd, esri, cover } = ev.data;
+      w.onmessage = (ev: MessageEvent<{ id: number; error?: { name: string; message: string }; nlcd?: Uint8Array; esri?: Uint8Array; cover?: Uint8Array; ign?: Uint8Array }>) => {
+        const { id, error, nlcd, esri, cover, ign } = ev.data;
         const p = ent.waiting.get(id);
         if (!p) return;
         ent.waiting.delete(id);
         ent.busy--;
         if (error) p.no(Object.assign(new Error(error.message), { name: error.name }));
-        else p.ok({ nlcd: nlcd!, esri: esri!, cover: cover! });
+        else p.ok({ nlcd: nlcd!, esri: esri!, cover: cover!, ign: ign! });
       };
       return ent;
     });

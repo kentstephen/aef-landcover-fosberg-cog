@@ -34,7 +34,7 @@ export const COLORMAP_CHOICES = [
 export type ColormapChoiceId = (typeof COLORMAP_CHOICES)[number]["id"];
 
 /** What the land cover layer draws: the ground lit by the hour's FFWI, the classes themselves, or nothing. */
-export type FuelChoice = "lit" | "cover" | "off";
+export type FuelChoice = "ignition" | "lit" | "cover" | "off";
 
 export type Status = {
   backend: "icechunk" | "zarr-v3" | null;
@@ -84,6 +84,15 @@ export type ControlPanelProps = {
 
   fuel: FuelChoice;
   onFuelChange: (f: FuelChoice) => void;
+  pHide: number;
+  onPHideChange: (v: number) => void;
+  pMax: number;
+  onPMaxChange: (v: number) => void;
+  showFires: boolean;
+  onShowFiresChange: (v: boolean) => void;
+  /** Fires discovered in the run's window (24 h before +0 to +48 h), and how many of them are natural. */
+  fireCount: number;
+  fireNatural: number;
   teacher: Teacher;
   onTeacherChange: (t: Teacher) => void;
   fuelOpacity: number;
@@ -153,23 +162,24 @@ export function ControlPanel(p: ControlPanelProps) {
   return (
     <div className={`pn${min ? " min" : ""}`}>
       <div className="pn-title">
-        <h1>Fuel under fire weather</h1>
+        <h1>Where fires start</h1>
         <button type="button" className="pn-min" aria-label={min ? "Expand panel" : "Collapse panel"} onClick={() => setMin((v) => !v)}>
           {min ? "▸" : "▾"}
         </button>
       </div>
 
       <p>
-        The ground, read from <b>AlphaEarth embeddings</b> by a small land cover model, lit hour by hour by the{" "}
-        <b>Fosberg Fire Weather Index</b> from NOAA's HRRR forecast. Open fuel (grass, shrub, pasture) carries the whole index,
-        forest part of it, built-up ground and water none; where the weather is calm the ground is invisible, and it comes up
-        in viridis as the forecast worsens.
+        Every pixel's <b>AlphaEarth embedding</b> goes through a small head fit on 22,000 real wildfire ignitions (WFIGS, 2019
+        to 2026) against points 20 to 30 km away at other hours, together with the hour's weather from NOAA's HRRR
+        forecast (Fosberg index, temperature, humidity, wind). The map shows the head's ignition probability hour by hour:
+        invisible where it is low, viridis as it climbs. The orange points are the fires that actually started in this run's
+        window, each lit at its discovery hour (rings are lightning fires, dots human or unknown; bigger means more acres).
       </p>
       <p className="muted small" style={{ marginTop: 6 }}>
         Data: <A href="https://source.coop/tge-labs/aef">AlphaEarth Foundations 2025</A> (tge-labs on Source Cooperative) ·{" "}
         <A href="https://dynamical.org/catalog/noaa-hrrr-forecast-48-hour/">NOAA HRRR 48 h</A> via{" "}
         <A href="https://dynamical.org">dynamical.org</A> ({s.backend === "icechunk" ? "Icechunk" : s.backend === "zarr-v3" ? "Zarr v3" : "opening"}) ·{" "}
-        <A href="https://www.frames.gov/catalog/27085">Fosberg 1978</A> · model taught by Annual NLCD 2024 and Esri / Impact Observatory LULC 2024
+        <A href="https://www.frames.gov/catalog/27085">Fosberg 1978</A> · <A href="https://data-nifc.opendata.arcgis.com/">NIFC WFIGS</A> ignitions
       </p>
 
       {loading ? (
@@ -179,11 +189,12 @@ export function ControlPanel(p: ControlPanelProps) {
         </div>
       ) : null}
 
-      <Fold k="fuel" label="The ground" defaultOpen tag={p.fuel === "lit" ? "lit by FFWI" : p.fuel === "cover" ? "land cover" : "off"}>
+      <Fold k="fuel" label="The ground" defaultOpen tag={p.fuel === "ignition" ? "ignition" : p.fuel === "lit" ? "lit by FFWI" : p.fuel === "cover" ? "land cover" : "off"}>
         <div className="row">
           <Seg
             value={p.fuel}
             options={[
+              { id: "ignition", label: "Ignition" },
               { id: "lit", label: "Lit by FFWI" },
               // the land cover as classes is not shown; the picture is the ground lit by the weather
               // { id: "cover", label: "Land cover" },
@@ -200,9 +211,25 @@ export function ControlPanel(p: ControlPanelProps) {
           </Help>
         </div>
         <p className="muted small">Reading: {reader}{s.aefReading > 0 ? ` · ${s.aefReading} tiles in flight` : ""}</p>
-        <div className="row">
-          <Seg value={p.teacher} options={[{ id: "nlcd", label: "NLCD (16 classes)" }, { id: "esri", label: "Esri (9 classes)" }]} onChange={p.onTeacherChange} />
-        </div>
+        {p.fuel === "ignition" ? (
+          <>
+            <div className="ramp" role="img" aria-label="Viridis ramp" style={{ backgroundImage: rampGradient() }} />
+            <p className="muted small">Ignition probability, {Math.round(p.pHide * 100)}% (invisible) to {Math.round(p.pMax * 100)}% (ramp top). Held out by region the head scores 0.80 AUC (0.78 for lightning fires, 0.86 human); the weather alone 0.71, land cover alone 0.70.</p>
+            <Field label={`Hide below ${Math.round(p.pHide * 100)}%`}>
+              <Slider min={0} max={0.95} step={0.05} value={p.pHide} onChange={p.onPHideChange} label="Hide below" onReset={() => p.onPHideChange(0.5)} />
+            </Field>
+            <Field label={`Ramp top ${Math.round(p.pMax * 100)}%`}>
+              <Slider min={0.5} max={1} step={0.01} value={p.pMax} onChange={p.onPMaxChange} label="Ramp top" onReset={() => p.onPMaxChange(0.95)} />
+            </Field>
+            <div className="row">
+              <Check checked={p.showFires} onChange={p.onShowFiresChange} label={`The fires that started: ${p.fireCount} in this window (${p.fireNatural} lightning)`} />
+            </div>
+          </>
+        ) : (
+          <div className="row">
+            <Seg value={p.teacher} options={[{ id: "nlcd", label: "NLCD (16 classes)" }, { id: "esri", label: "Esri (9 classes)" }]} onChange={p.onTeacherChange} />
+          </div>
+        )}
         {p.fuel === "lit" ? (
           <>
             <div className="ramp" role="img" aria-label="Viridis ramp" style={{ backgroundImage: rampGradient() }} />
@@ -215,7 +242,7 @@ export function ControlPanel(p: ControlPanelProps) {
         <Field
           label={
             <span className="row">
-              <span>{p.glowHours === 0 ? "Afterglow: off (this hour only)" : `Afterglow: the brightest of the last ${p.glowHours} h, fading by fuel`}</span>
+              <span>{p.glowHours === 0 ? "Afterglow: off (this hour only)" : `Afterglow: the brightest of the last ${p.glowHours} h${p.fuel === "ignition" ? "" : ", fading by fuel"}`}</span>
               <Help label="Afterglow">
                 Each pixel shows the brightest hour behind it, faded by exp(-age / hold), with a hold per land cover: grass,
                 pasture and shrub let a windy hour go in about 3 to 6 h, timber holds it about a day, built ground and water hold

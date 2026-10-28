@@ -12,6 +12,7 @@ import type { MapRef } from "react-map-gl/maplibre";
 import { Map as MaplibreMap } from "react-map-gl/maplibre";
 import type * as zarr from "zarrita";
 import { fuelOf } from "./aef/fuel.js";
+import { fireLayers, firesInRun, loadFires, type Fires } from "./fires.js";
 import { HEADS, NO_CLASS, type Teacher } from "./aef/head.js";
 import { AefLayers } from "./aef/layers.js";
 import { type AefArray, openAefMosaic } from "./aef/mosaic.js";
@@ -122,6 +123,17 @@ export default function App() {
       .catch((e) => { if (!gone) setError(`AEF mosaic: ${String(e)}`); });
     return () => { gone = true; };
   }, []);
+  // ---- the real ignitions (every WFIGS wildfire; the run's window is picked out per run)
+  const [fires, setFires] = useState<Fires | null>(null);
+  useEffect(() => {
+    let gone = false;
+    loadFires(import.meta.env.BASE_URL)
+      .then((f) => { if (!gone) setFires(f); })
+      .catch((e) => { if (!gone) setError(`fires: ${String(e)}`); });
+    return () => { gone = true; };
+  }, []);
+  const [showFires, setShowFires] = useState(true);
+  const fireList = useMemo(() => (fires && source ? firesInRun(fires, dateFromInitTimeIdx(initTimeIdx)) : []), [fires, source, initTimeIdx]);
   const [aefVersion, setAefVersion] = useState(0);
   const needWeatherRef = useRef<(px: Int16Array, py: Int16Array) => void>(() => {});
   const aefLayers = useMemo(() => {
@@ -191,7 +203,10 @@ export default function App() {
   useEffect(() => {
     cacheRef.current.setTau(tauHours);
   }, [tauHours]);
-  const [fuel, setFuelState] = useState<FuelChoice>("lit");
+  const [fuel, setFuelState] = useState<FuelChoice>("ignition");
+  /** Ignition mode: hidden below this probability, ramp top at pMax. */
+  const [pHide, setPHide] = useState(0.5);
+  const [pMax, setPMax] = useState(0.95);
   // one picture at a time: drawing the field puts the ground off, and the ground back on puts the field away
   const setShowRaster = useCallback((on: boolean) => {
     setShowRasterState(on);
@@ -277,7 +292,10 @@ export default function App() {
     const className = ci === NO_CLASS ? null : HEADS[teacher].names[ci]!;
     const weight = ci === NO_CLASS ? 0 : fuelOf(teacher, ci);
     const ffwi = wx?.ffwi ?? NaN;
-    return { wx, ground, className, weight, lit: Number.isFinite(ffwi) ? ffwi * weight : NaN };
+    const wl = px ? cacheRef.current.ignitionAt(px.x, px.y, leadTimeIdx) : NaN;
+    const ignP = ground && Number.isFinite(wl) ? 1 / (1 + Math.exp(-(ground.ign + wl))) : NaN;
+    const groundP = ground ? 1 / (1 + Math.exp(-ground.ign)) : NaN;
+    return { wx, ground, className, weight, lit: Number.isFinite(ffwi) ? ffwi * weight : NaN, ignP, groundP };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hover, leadTimeIdx, cacheVersion, aefLayers, aefVersion, teacher]);
 
@@ -336,12 +354,14 @@ export default function App() {
     if (aefLayers) {
       out.push(
         ...aefLayers.layers({
-          mode: fuel === "cover" ? "cover" : "lit",
+          mode: fuel === "cover" ? "cover" : fuel === "ignition" ? "ignition" : "lit",
           zoom,
           teacher,
           leadTimeIdx,
           hideBelow,
           rescaleMax,
+          pHide,
+          pMax,
           glowHours,
           grain,
           light,
@@ -350,6 +370,9 @@ export default function App() {
           beforeId: BEFORE_ID,
         }),
       );
+    }
+    if (fireList.length > 0) {
+      out.push(...fireLayers({ fires: fireList, initTime: dateFromInitTimeIdx(initTimeIdx), leadHours: leadTimeIdx, visible: showFires, beforeId: BEFORE_ID }));
     }
     if (contourLines.length > 0) {
       out.push(
@@ -373,7 +396,7 @@ export default function App() {
   }, [
     showRaster, source, getTileData, colormapTexture, initTimeIdx, windMode, rasterVariable, selection, renderTile, rasterOpacity,
     leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity, zoom,
-    glowHours, grain, light, contourLines,
+    glowHours, grain, light, contourLines, pHide, pMax, fireList, showFires,
   ]);
 
   const status: Status = {
@@ -471,6 +494,14 @@ export default function App() {
         onFrameDurationMsChange={setFrameDurationMs}
         fuel={fuel}
         onFuelChange={setFuel}
+        pHide={pHide}
+        onPHideChange={setPHide}
+        pMax={pMax}
+        onPMaxChange={setPMax}
+        showFires={showFires}
+        onShowFiresChange={setShowFires}
+        fireCount={fireList.length}
+        fireNatural={fireList.filter((f) => f.cause === 1).length}
         teacher={teacher}
         onTeacherChange={setTeacher}
         fuelOpacity={fuelOpacity}
@@ -507,7 +538,12 @@ export default function App() {
       {hover && hoverInfo && (hoverInfo.className || (hoverInfo.wx && Number.isFinite(hoverInfo.wx.ffwi))) ? (
         <div style={tooltipStyle(hover.x, hover.y)}>
           <div style={{ fontWeight: 600 }}>
-            {hoverInfo.className ? `${hoverInfo.className} · fuel ${hoverInfo.weight.toFixed(2)}` : "no embedding here"}
+            {hoverInfo.ground
+              ? `ignition ${Number.isFinite(hoverInfo.ignP) ? `${Math.round(hoverInfo.ignP * 100)}%` : "?"} this hour · ground alone ${Math.round(hoverInfo.groundP * 100)}%`
+              : "no embedding here"}
+          </div>
+          <div style={{ color: "#bbb" }}>
+            {hoverInfo.className ? `reads as ${hoverInfo.className}` : ""}
             {hoverInfo.ground ? ` · canopy ${Math.round(hoverInfo.ground.cover * 100)}%` : ""}
           </div>
           <div>

@@ -1,4 +1,5 @@
-import { ffwiFromMoisture, lagMoisture, M_SCALE, U16_NAN, WIND_SCALE } from "../ffwi/compute.js";
+import { ignitionWeather } from "../aef/head.js";
+import { ffwiFromMoisture, lagMoisture, M_SCALE, MS_TO_MPH, U16_NAN, WIND_SCALE } from "../ffwi/compute.js";
 import { HRRR_GRID, HRRR_LEAD_TIME_COUNT, HRRR_SHARD } from "./metadata.js";
 
 /**
@@ -153,6 +154,43 @@ export class FfwiTileCache {
       const w = t.wind[i]!;
       out[lead] = m === U16_NAN || w === U16_NAN ? NaN : ffwiFromMoisture(m / M_SCALE, w / WIND_SCALE);
     }
+  }
+
+  /**
+   * The weather part of the ignition logit for every lead at one pixel (lagged FFWI, T, RH and the
+   * wind in m/s through the ignition head); NaN where not loaded.
+   */
+  ignitionSeries(hrrrX: number, hrrrY: number, out: Float32Array): void {
+    const t = this.byIdx[FfwiTileCache.idxFor(hrrrX, hrrrY)];
+    if (!t) {
+      out.fill(NaN);
+      return;
+    }
+    const per = t.width * t.height;
+    const off = (hrrrY - t.rowStart) * t.width + (hrrrX - t.colStart);
+    for (let lead = 0; lead < HRRR_LEAD_TIME_COUNT; lead++) {
+      const i = lead * per + off;
+      const m = t.mLag[i]!;
+      const w = t.wind[i]!;
+      if (m === U16_NAN || w === U16_NAN) {
+        out[lead] = NaN;
+        continue;
+      }
+      const mph = w / WIND_SCALE;
+      out[lead] = ignitionWeather(ffwiFromMoisture(m / M_SCALE, mph), (t.tc[i] ?? 100) - 100, t.rh[i] ?? 0, mph / MS_TO_MPH);
+    }
+  }
+
+  /** The weather part of the ignition logit at one pixel and lead, NaN if not loaded. */
+  ignitionAt(hrrrX: number, hrrrY: number, lead: number): number {
+    const t = this.byIdx[FfwiTileCache.idxFor(hrrrX, hrrrY)];
+    if (!t) return NaN;
+    const i = lead * t.width * t.height + (hrrrY - t.rowStart) * t.width + (hrrrX - t.colStart);
+    const m = t.mLag[i]!;
+    const w = t.wind[i]!;
+    if (m === U16_NAN || w === U16_NAN) return NaN;
+    const mph = w / WIND_SCALE;
+    return ignitionWeather(ffwiFromMoisture(m / M_SCALE, mph), (t.tc[i] ?? 100) - 100, t.rh[i] ?? 0, mph / MS_TO_MPH);
   }
 
   /** Lagged FFWI at one pixel and lead, NaN if not loaded / fill. Fast path for the county loops. */

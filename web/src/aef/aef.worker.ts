@@ -16,7 +16,7 @@ let mosaic: Promise<AefArray> | null = null;
 const running = new Map<number, AbortController>();
 
 function reply(id: number, c: Classified) {
-  postMessage({ id, ...c }, { transfer: [c.nlcd.buffer, c.esri.buffer, c.cover.buffer] });
+  postMessage({ id, ...c }, { transfer: [c.nlcd.buffer, c.esri.buffer, c.cover.buffer, c.ign.buffer] });
 }
 function fail(id: number, e: unknown) {
   const err = e as { name?: string; message?: string };

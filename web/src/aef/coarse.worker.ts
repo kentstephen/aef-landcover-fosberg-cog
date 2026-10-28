@@ -150,7 +150,7 @@ function fileLevel(idx: AefIndex, f: AefFile, level: number): Promise<Planes> {
       }
       let out: Classified;
       if (span === 0) {
-        out = { nlcd: new Uint8Array(n).fill(NO_CLASS), esri: new Uint8Array(n).fill(NO_CLASS), cover: new Uint8Array(n) };
+        out = { nlcd: new Uint8Array(n).fill(NO_CLASS), esri: new Uint8Array(n).fill(NO_CLASS), cover: new Uint8Array(n), ign: new Uint8Array(n) };
       } else {
         const bytes = await rangeGet(idx.base + f.rel, start, span);
         out = await decodeSlot(async () => {
@@ -171,7 +171,7 @@ function fileLevel(idx: AefIndex, f: AefFile, level: number): Promise<Planes> {
           return classify(data, n);
         });
       }
-      const pl: Planes = { ...out, width, bytes: 3 * n };
+      const pl: Planes = { ...out, width, bytes: 4 * n };
       keep(key, pl);
       return pl;
     })();
@@ -207,6 +207,7 @@ async function tile(m: { id: number; z: number; x: number; y: number; level: num
   const nlcd = new Uint8Array(np).fill(NO_CLASS);
   const esri = new Uint8Array(np).fill(NO_CLASS);
   const cover = new Uint8Array(np);
+  const ign = new Uint8Array(np);
   // UTM of every pixel center by zone, from a 9 x 9 grid of projected points (UTM is smooth)
   const G = 8;
   const zones = [...new Set(files.map((f) => f.zone))];
@@ -254,11 +255,12 @@ async function tile(m: { id: number; z: number; x: number; y: number; level: num
         nlcd[o] = cls;
         esri[o] = pl.esri[q]!;
         cover[o] = pl.cover[q]!;
+        ign[o] = pl.ign[q]!;
         break;
       }
     }
   }
-  postMessage({ id: m.id, nlcd, esri, cover }, { transfer: [nlcd.buffer, esri.buffer, cover.buffer] });
+  postMessage({ id: m.id, nlcd, esri, cover, ign }, { transfer: [nlcd.buffer, esri.buffer, cover.buffer, ign.buffer] });
 }
 
 self.onmessage = (ev: MessageEvent<Msg>) => {

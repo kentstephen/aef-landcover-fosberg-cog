@@ -43,7 +43,10 @@ export function makeGrid(extentM: number, toLonLat: (u: number, v: number) => [n
   return { cols: n, rows: n, fx, fy, px, py };
 }
 
-export function weatherTexture(device: Device, g: WeatherGrid, cache: FfwiTileCache): Texture {
+/** What a weather texture holds per node and lead: the FFWI, or the weather part of the ignition logit. */
+export type WeatherKind = "ffwi" | "ignition";
+
+export function weatherTexture(device: Device, g: WeatherGrid, cache: FfwiTileCache, kind: WeatherKind = "ffwi"): Texture {
   const per = g.cols * g.rows;
   const data = new Uint16Array(HRRR_LEAD_TIME_COUNT * per);
   const nan = toHalf(NaN);
@@ -73,7 +76,8 @@ export function weatherTexture(device: Device, g: WeatherGrid, cache: FfwiTileCa
         const xx = x0 + dx;
         const yy = y0 + dy;
         if (!cache.inGrid(xx, yy)) continue;
-        cache.ffwiSeries(xx, yy, s);
+        if (kind === "ignition") cache.ignitionSeries(xx, yy, s);
+        else cache.ffwiSeries(xx, yy, s);
         for (let l = 0; l < HRRR_LEAD_TIME_COUNT; l++) {
           const v = s[l]!;
           if (v === v) {
