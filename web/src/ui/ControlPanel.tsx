@@ -1,8 +1,7 @@
 import { COLORMAP_INDEX } from "@developmentseed/deck.gl-raster/gpu-modules";
 import colormapsPngUrl from "@developmentseed/deck.gl-raster/gpu-modules/colormaps.png";
 import { useState } from "react";
-import { FUEL } from "../aef/fuel.js";
-import { HEADS, type Teacher } from "../aef/head.js";
+import type { Teacher } from "../aef/head.js";
 import { COG_MIN_ZOOM } from "../aef/sources.js";
 import { MOSAIC_MIN_ZOOM } from "../aef/mosaic.js";
 import { rampGradient } from "../aef/ramp.js";
@@ -126,7 +125,6 @@ export function ControlPanel(p: ControlPanelProps) {
   const loading = loadingSummary(s);
   const rv = RASTER_VARIABLES[p.rasterVariable];
   const [min, setMin] = useState(false);
-  const head = HEADS[p.teacher];
   const reader = p.zoom >= MOSAIC_MIN_ZOOM ? "10 m mosaic" : p.zoom >= COG_MIN_ZOOM ? "COG overviews" : `zoom in to ${COG_MIN_ZOOM} for the land cover`;
 
   const field = p.showRaster ? p.rasterVariable : "nothing";
@@ -178,7 +176,8 @@ export function ControlPanel(p: ControlPanelProps) {
             value={p.fuel}
             options={[
               { id: "lit", label: "Lit by FFWI" },
-              { id: "cover", label: "Land cover" },
+              // the land cover as classes is not shown; the picture is the ground lit by the weather
+              // { id: "cover", label: "Land cover" },
               { id: "off", label: "Off" },
             ]}
             onChange={p.onFuelChange}
@@ -203,6 +202,7 @@ export function ControlPanel(p: ControlPanelProps) {
         <Field label={`Opacity ${Math.round(p.fuelOpacity * 100)}%`}>
           <Slider min={0.05} max={1} step={0.05} value={p.fuelOpacity} onChange={p.onFuelOpacityChange} label="Ground opacity" onReset={() => p.onFuelOpacityChange(0.9)} />
         </Field>
+        {/* class legend with fuel weights, not shown while the classes themselves are not drawn
         <div className="legend">
           {head.classes.map((code, i) => (
             <div key={code} className="legend-row">
@@ -213,6 +213,7 @@ export function ControlPanel(p: ControlPanelProps) {
           ))}
         </div>
         <p className="muted small">Right column: the fuel weight each class carries (first cut, to be tuned).</p>
+        */}
       </Fold>
 
       <Fold k="time" label="Forecast hour" defaultOpen tag={`+${hours} h · ${validStr}`}>
