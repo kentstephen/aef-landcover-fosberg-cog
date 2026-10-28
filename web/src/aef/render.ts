@@ -17,9 +17,15 @@ export type FuelLightProps = {
   rampTex: Texture;
   /** 0 = lit by the hour's FFWI, 1 = land cover classes, 2 = ignition probability. */
   mode: number;
-  /** Ignition mode: hidden below this probability, ramp top at pMax. */
+  /** Ignition mode, probability scale: hidden below pHide, ramp top at pMax. */
   pHide: number;
   pMax: number;
+  /** Ignition mode: 0 = the ramp over the probability (pHide..pMax), 1 = over the logit (zLo..zHi). */
+  scale: number;
+  zLo: number;
+  zHi: number;
+  /** 0 = the ground alone (the weather term left out), 1 = ground plus the hour's weather. */
+  useWeather: number;
   layerIndex: number;
   hideBelow: number;
   rescaleMax: number;
@@ -53,6 +59,10 @@ uniform ${MODULE_NAME}Uniforms {
   float grain;
   float pHide;
   float pMax;
+  float scale;
+  float zLo;
+  float zHi;
+  float useWeather;
 } ${MODULE_NAME};
 `,
   inject: {
@@ -78,20 +88,29 @@ float fuelHash(vec2 p) {
         // the ignition head: ground logit (per pixel) plus the hour's weather logit (per node), sigmoid;
         // with the afterglow on, the brightest of the hours behind, each losing 0.3 logit per hour
         float g = texture(groundTex, geometry.uv).r * ${IGN_HI - IGN_LO}.0 + (${IGN_LO}.0);
-        float wl = texture(ffwiTex, vec3(geometry.uv, ${MODULE_NAME}.layerIndex)).r;
-        float z = isnan(wl) ? -99.0 : g + wl;
-        int back = int(min(${MODULE_NAME}.glowHours, 48.0));
-        for (int k = 1; k <= 48; k++) {
-          if (k > back) break;
-          float l = ${MODULE_NAME}.layerIndex - float(k);
-          if (l < 0.0) break;
-          float wk = texture(ffwiTex, vec3(geometry.uv, l)).r;
-          if (isnan(wk)) continue;
-          z = max(z, g + wk - 0.3 * float(k));
+        float z = g;
+        if (${MODULE_NAME}.useWeather > 0.5) {
+          float wl = texture(ffwiTex, vec3(geometry.uv, ${MODULE_NAME}.layerIndex)).r;
+          z = isnan(wl) ? -99.0 : g + wl;
+          int back = int(min(${MODULE_NAME}.glowHours, 48.0));
+          for (int k = 1; k <= 48; k++) {
+            if (k > back) break;
+            float l = ${MODULE_NAME}.layerIndex - float(k);
+            if (l < 0.0) break;
+            float wk = texture(ffwiTex, vec3(geometry.uv, l)).r;
+            if (isnan(wk)) continue;
+            z = max(z, g + wk - 0.3 * float(k));
+          }
         }
-        float pr = 1.0 / (1.0 + exp(-z));
-        if (pr < ${MODULE_NAME}.pHide) discard;
-        float t = clamp((pr - ${MODULE_NAME}.pHide) / max(${MODULE_NAME}.pMax - ${MODULE_NAME}.pHide, 0.01), 0.0, 1.0);
+        float t;
+        if (${MODULE_NAME}.scale > 0.5) {
+          if (z < ${MODULE_NAME}.zLo) discard;
+          t = clamp((z - ${MODULE_NAME}.zLo) / max(${MODULE_NAME}.zHi - ${MODULE_NAME}.zLo, 0.01), 0.0, 1.0);
+        } else {
+          float pr = 1.0 / (1.0 + exp(-z));
+          if (pr < ${MODULE_NAME}.pHide) discard;
+          t = clamp((pr - ${MODULE_NAME}.pHide) / max(${MODULE_NAME}.pMax - ${MODULE_NAME}.pHide, 0.0001), 0.0, 1.0);
+        }
         float a = min(1.0, t / 0.15);
         if (${MODULE_NAME}.grain > 0.0) {
           vec2 cell = floor(geometry.uv * ${MODULE_NAME}.grain);
@@ -132,7 +151,7 @@ float fuelHash(vec2 p) {
       }
     `,
   },
-  uniformTypes: { mode: "f32", layerIndex: "f32", hideBelow: "f32", rescaleMax: "f32", glowHours: "f32", grain: "f32", pHide: "f32", pMax: "f32" },
+  uniformTypes: { mode: "f32", layerIndex: "f32", hideBelow: "f32", rescaleMax: "f32", glowHours: "f32", grain: "f32", pHide: "f32", pMax: "f32", scale: "f32", zLo: "f32", zHi: "f32", useWeather: "f32" },
   getUniforms: (p: Partial<FuelLightProps>) => ({
     mode: p.mode ?? 0,
     layerIndex: p.layerIndex ?? 0,
@@ -142,6 +161,10 @@ float fuelHash(vec2 p) {
     grain: p.grain ?? 0,
     pHide: p.pHide ?? 0.5,
     pMax: p.pMax ?? 0.95,
+    scale: p.scale ?? 0,
+    zLo: p.zLo ?? 0,
+    zHi: p.zHi ?? 4,
+    useWeather: p.useWeather ?? 1,
     classTex: p.classTex,
     groundTex: p.groundTex,
     ffwiTex: p.ffwiTex,

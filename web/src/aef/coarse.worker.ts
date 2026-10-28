@@ -3,6 +3,7 @@ import proj4 from "proj4";
 import { cacheGet, cachePut } from "./disk-cache.js";
 import { classify, type Classified, NO_CLASS } from "./head.js";
 import { type AefFile, type AefIndex, FULL_WIDTH, loadAefIndex, NUM_BANDS, RECORD_BYTES } from "./index.js";
+import { AEF_YEAR } from "./mosaic.js";
 import { TILE, tileBounds, toLat, toLon } from "./mercator.js";
 
 /**
@@ -98,7 +99,7 @@ const decodeSlot = slots(DECODE_SLOTS);
 function ranges(zone: string): Promise<DataView> {
   let p = zoneRanges.get(zone);
   if (!p) {
-    p = fetch(`${baseUrl}aef-2025-ranges-${zone}.bin`).then(async (r) => {
+    p = fetch(`${baseUrl}aef-${AEF_YEAR}-ranges-${zone}.bin`).then(async (r) => {
       if (!r.ok) throw new Error(`ranges ${zone}: HTTP ${r.status}`);
       return new DataView(await r.arrayBuffer());
     });

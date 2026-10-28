@@ -10,12 +10,12 @@ import { lutTexture } from "./fuel.js";
 import { type Classified, type Teacher } from "./head.js";
 import { type AefIndex, levelFor } from "./index.js";
 import { E, fromLat, fromLon, TILE, tileBounds, tileRes, toLat, toLon } from "./mercator.js";
-import { type AefArray, MOSAIC_MIN_ZOOM, RES, X0, Y0, YEAR_IDX_2025 } from "./mosaic.js";
+import { type AefArray, MOSAIC_MIN_ZOOM, RES, X0, Y0, YEAR_IDX } from "./mosaic.js";
 import type { AefPool } from "./pool.js";
 import { rampTexture } from "./ramp.js";
 import { fuelPipeline, type FuelMode } from "./render.js";
 import { makeGrid, type WeatherGrid, type WeatherKind, weatherTexture } from "./weather.js";
-import { ignLogit } from "./head.js";
+import { ignLogit, NO_CLASS } from "./head.js";
 
 /**
  * The land cover under the weather, two readers by zoom with the same head and the same shader:
@@ -40,6 +40,8 @@ export type AefTile = {
   /** Per node and lead: the FFWI, or in ignition mode the weather part of the ignition logit. */
   ffwiTex: Texture;
   weatherKind: WeatherKind;
+  /** The weather texture's values on the CPU (lead-major, per node), for the rank scale. */
+  weatherNodes: Float32Array;
   /** Every node had weather when the texture was built (nothing to rebuild for a new shard). */
   weatherComplete: boolean;
   /** The fuel lag the texture was built with. */
@@ -60,9 +62,14 @@ export type AefLayerOpts = {
   leadTimeIdx: number;
   hideBelow: number;
   rescaleMax: number;
-  /** Ignition mode: hidden below this probability, ramp top at pMax. */
+  /** Ignition mode: hidden below this probability, ramp top at pMax (probability scale). */
   pHide: number;
   pMax: number;
+  /** Ignition mode: the ramp over the probability or over the logit (zLo..zHi); the weather in or out. */
+  scale: "probability" | "logit";
+  zLo: number;
+  zHi: number;
+  useWeather: boolean;
   /** Hours of afterglow (0 = this hour only). */
   glowHours: number;
   /** Grain cells across a tile (0 = flat fill). */
@@ -143,6 +150,7 @@ export class AefLayers {
       const old = t.ffwiTex;
       const w = weatherTexture(this.device, t.grid, this.cache, this.weatherKind);
       t.ffwiTex = w.tex;
+      t.weatherNodes = w.nodes;
       t.weatherComplete = w.complete;
       t.weatherTau = this.cache.tau;
       t.weatherKind = this.weatherKind;
@@ -191,6 +199,7 @@ export class AefLayers {
       grid,
       ffwiTex: w.tex,
       weatherKind: this.weatherKind,
+      weatherNodes: w.nodes,
       weatherComplete: w.complete,
       weatherTau: this.cache.tau,
       bbox,
@@ -250,7 +259,7 @@ export class AefLayers {
       const py0 = ys.start ?? 0;
       const px0 = xs.start ?? 0;
       const { width, height } = o;
-      const classes = await this.pool.zarr(YEAR_IDX_2025, py0, px0, height, width, o.signal);
+      const classes = await this.pool.zarr(YEAR_IDX, py0, px0, height, width, o.signal);
       const toLonLat = (u: number, v: number): [number, number] => [X0 + (px0 + u * width) * RES, Y0 - (py0 + v * height) * RES];
       const pixelAt = (lon: number, lat: number) => {
         const ci = Math.floor((lon - X0) / RES) - px0;
@@ -277,6 +286,10 @@ export class AefLayers {
       rescaleMax: o.rescaleMax,
       pHide: o.pHide,
       pMax: o.pMax,
+      scale: o.scale === "logit" ? 1 : 0,
+      zLo: o.zLo,
+      zHi: o.zHi,
+      useWeather: o.useWeather ? 1 : 0,
       glowHours: o.glowHours,
       grain: o.grain,
     });
@@ -295,7 +308,7 @@ export class AefLayers {
     }
     // debug hook for the headless probe (this instance is the one deck draws from)
     (globalThis as unknown as { __aef?: unknown }).__aef = { layers: this, cache: this.cache };
-    const key = `${opts.mode}|${opts.teacher}|${opts.leadTimeIdx}|${opts.hideBelow}|${opts.rescaleMax}|${opts.pHide}|${opts.pMax}|${opts.glowHours}|${opts.grain}`;
+    const key = `${opts.mode}|${opts.teacher}|${opts.leadTimeIdx}|${opts.hideBelow}|${opts.rescaleMax}|${opts.pHide}|${opts.pMax}|${opts.scale}|${opts.zLo}|${opts.zHi}|${opts.useWeather}|${opts.glowHours}|${opts.grain}`;
     if (key !== this.lastKey) {
       this.lastKey = key;
       this.version++;
@@ -326,7 +339,7 @@ export class AefLayers {
       id: "aef-zarr",
       node: this.mosaic.arr,
       metadata: this.mosaic.attrs,
-      selection: { time: YEAR_IDX_2025, band: null },
+      selection: { time: YEAR_IDX, band: null },
       getTileData: this.zarrGetTileData,
       minZoom: MOSAIC_MIN_ZOOM,
       maxRequests: 6,
@@ -334,6 +347,42 @@ export class AefLayers {
       ...common,
     } as never);
     return [coarse, fine];
+  }
+
+  /**
+   * The ignition logit at given quantiles over the pixels of the tiles on hand inside a lon/lat view, at one
+   * lead (every 4th pixel each way, the weather at the pixel's nearest node; the afterglow left out). For
+   * the rank scale: the ramp set so the view's brightest fraction is the ramp top, whatever the weather.
+   */
+  quantiles(view: [number, number, number, number], lead: number, qs: number[], useWeather: boolean, kind: AefTile["kind"]): number[] | null {
+    const vals: number[] = [];
+    const [vw, vs, ve, vn] = view;
+    for (const t of this.live.values()) {
+      if (t.kind !== kind) continue;
+      const [w, s, e, n] = t.bbox;
+      if (e < vw || w > ve || n < vs || s > vn) continue;
+      const { cols, rows } = t.grid;
+      const per = cols * rows;
+      const off = lead * per;
+      for (let y = 2; y < t.height; y += 4) {
+        const ny = Math.min(rows - 1, Math.floor((y / t.height) * rows));
+        for (let x = 2; x < t.width; x += 4) {
+          const i = y * t.width + x;
+          if (t.classes.nlcd[i] === NO_CLASS) continue;
+          let z = ignLogit(t.classes.ign[i]!);
+          if (useWeather) {
+            const nx = Math.min(cols - 1, Math.floor((x / t.width) * cols));
+            const wv = t.weatherNodes[off + ny * cols + nx]!;
+            if (wv !== wv) continue;
+            z += wv;
+          }
+          vals.push(z);
+        }
+      }
+    }
+    if (vals.length < 100) return null;
+    vals.sort((a, b) => a - b);
+    return qs.map((q) => vals[Math.min(vals.length - 1, Math.floor(q * vals.length))]!);
   }
 
   /** The classes under a lon/lat from the tiles on hand (the finer reader first), or null. */

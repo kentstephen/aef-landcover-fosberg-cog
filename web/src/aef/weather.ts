@@ -46,11 +46,18 @@ export function makeGrid(extentM: number, toLonLat: (u: number, v: number) => [n
 /** What a weather texture holds per node and lead: the FFWI, or the weather part of the ignition logit. */
 export type WeatherKind = "ffwi" | "ignition";
 
-export type WeatherTex = { tex: Texture; /** Every node on the grid had weather for every lead. */ complete: boolean };
+export type WeatherTex = {
+  tex: Texture;
+  /** Every node on the grid had weather for every lead. */
+  complete: boolean;
+  /** The values per lead and node (lead-major), NaN where missing: what the texture holds, on the CPU. */
+  nodes: Float32Array;
+};
 
 export function weatherTexture(device: Device, g: WeatherGrid, cache: FfwiTileCache, kind: WeatherKind = "ffwi"): WeatherTex {
   const per = g.cols * g.rows;
   let complete = true;
+  const nodes = new Float32Array(HRRR_LEAD_TIME_COUNT * per).fill(NaN);
   const data = new Uint16Array(HRRR_LEAD_TIME_COUNT * per);
   const nan = toHalf(NaN);
   const acc = new Float32Array(HRRR_LEAD_TIME_COUNT);
@@ -91,8 +98,11 @@ export function weatherTexture(device: Device, g: WeatherGrid, cache: FfwiTileCa
       }
     }
     for (let l = 0; l < HRRR_LEAD_TIME_COUNT; l++) {
-      if (wsum[l]! > 0) data[l * per + k] = toHalf(acc[l]! / wsum[l]!);
-      else {
+      if (wsum[l]! > 0) {
+        const v = acc[l]! / wsum[l]!;
+        data[l * per + k] = toHalf(v);
+        nodes[l * per + k] = v;
+      } else {
         data[l * per + k] = nan;
         complete = false;
       }
@@ -108,5 +118,5 @@ export function weatherTexture(device: Device, g: WeatherGrid, cache: FfwiTileCa
     data,
     sampler: { minFilter: "linear", magFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" },
   });
-  return { tex, complete };
+  return { tex, complete, nodes };
 }

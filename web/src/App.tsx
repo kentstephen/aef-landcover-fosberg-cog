@@ -13,9 +13,10 @@ import { Map as MaplibreMap } from "react-map-gl/maplibre";
 import type * as zarr from "zarrita";
 import { fuelOf } from "./aef/fuel.js";
 // import { fireLayers, firesInRun, loadFires, type Fires } from "./fires.js";
+import { loadPerimeters, type Perimeter, perimeterLayer, perimetersInRun } from "./perimeters.js";
 import { HEADS, NO_CLASS, type Teacher } from "./aef/head.js";
 import { AefLayers } from "./aef/layers.js";
-import { type AefArray, openAefMosaic } from "./aef/mosaic.js";
+import { type AefArray, AEF_YEAR, MOSAIC_MIN_ZOOM, openAefMosaic } from "./aef/mosaic.js";
 import { AefPool } from "./aef/pool.js";
 import { CoarsePool } from "./aef/coarse.js";
 import { type AefIndex, loadAefIndex } from "./aef/index.js";
@@ -30,7 +31,7 @@ import { openHrrr, type HrrrSource } from "./hrrr/store.js";
 import { FfwiTileCache } from "./hrrr/tile-cache.js";
 import { RASTER_VARIABLES, type RasterVariable } from "./hrrr/variables.js";
 import { DeckGlOverlay } from "./lib/deckgl-overlay.js";
-import { ControlPanel, loadingSummary, type ColormapChoiceId, type FuelChoice, type Status } from "./ui/ControlPanel.js";
+import { ControlPanel, loadingSummary, type ColormapChoiceId, type FuelChoice, type IgnScale, type Status } from "./ui/ControlPanel.js";
 
 const MAP_STYLE_URL = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 /** First basemap layer above water in CARTO styles; data goes under roads/labels. */
@@ -129,6 +130,17 @@ export default function App() {
   // useEffect(() => { loadFires(import.meta.env.BASE_URL).then(setFires).catch((e) => setError(`fires: ${String(e)}`)); }, []);
   // const [showFires, setShowFires] = useState(true);
   // const fireList = useMemo(() => (fires && source ? firesInRun(fires, dateFromInitTimeIdx(initTimeIdx)) : []), [fires, source, initTimeIdx]);
+  // ---- the burn perimeters of the fires (the year after the embeddings), the frame for the picture
+  const [perimeters, setPerimeters] = useState<Perimeter[]>([]);
+  useEffect(() => {
+    let gone = false;
+    loadPerimeters(import.meta.env.BASE_URL, AEF_YEAR + 1)
+      .then((f) => { if (!gone) setPerimeters(f); })
+      .catch((e) => { if (!gone) setError(`perimeters: ${String(e)}`); });
+    return () => { gone = true; };
+  }, []);
+  const [showPerimeters, setShowPerimeters] = useState(true);
+  const runPerimeters = useMemo(() => (source ? perimetersInRun(perimeters, dateFromInitTimeIdx(initTimeIdx)) : []), [perimeters, source, initTimeIdx]);
   const [aefVersion, setAefVersion] = useState(0);
   const needWeatherRef = useRef<(px: Int16Array, py: Int16Array) => void>(() => {});
   const aefLayers = useMemo(() => {
@@ -202,6 +214,15 @@ export default function App() {
   /** Ignition mode: hidden below this probability, ramp top at pMax. */
   const [pHide, setPHide] = useState(0.5);
   const [pMax, setPMax] = useState(0.95);
+  /** How the ignition logit meets the ramp: probability, logit, or rank among the pixels in view this hour. */
+  const [ignScale, setIgnScale] = useState<IgnScale>("probability");
+  const [zLo, setZLo] = useState(0);
+  const [zHi, setZHi] = useState(4);
+  /** Rank scale: the quantiles in view that sit at the hide line and the ramp top. */
+  const [qLo, setQLo] = useState(0.5);
+  const [qHi, setQHi] = useState(0.99);
+  /** The weather term left out: the ground alone. */
+  const [useWeather, setUseWeather] = useState(true);
   // one picture at a time: drawing the field puts the ground off, and the ground back on puts the field away
   const setShowRaster = useCallback((on: boolean) => {
     setShowRasterState(on);
@@ -295,6 +316,15 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hover, leadTimeIdx, cacheVersion, aefLayers, aefVersion, teacher]);
 
+  // ---- the rank scale: the view's quantiles of the logit this hour set the logit ramp
+  const rankRamp = useMemo<[number, number] | null>(() => {
+    if (ignScale !== "rank" || !view || !aefLayers) return null;
+    const kind = zoom < MOSAIC_MIN_ZOOM ? "coarse" : "zarr";
+    const q = aefLayers.quantiles(view, leadTimeIdx, [qLo, qHi], useWeather, kind);
+    return q ? [q[0]!, Math.max(q[1]!, q[0]! + 0.05)] : null;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ignScale, view, zoom, leadTimeIdx, qLo, qHi, useWeather, aefLayers, aefVersion]);
+
   // ---- contours of the field: recomputed when the hour, the weather, the view or the lag changes
   const contourLines = useMemo<ContourPath[]>(() => {
     if (!view || contourStep <= 0) return [];
@@ -358,6 +388,10 @@ export default function App() {
           rescaleMax,
           pHide,
           pMax,
+          scale: ignScale === "probability" ? "probability" : "logit",
+          zLo: ignScale === "rank" ? (rankRamp ? rankRamp[0] : 99) : zLo,
+          zHi: ignScale === "rank" ? (rankRamp ? rankRamp[1] : 100) : zHi,
+          useWeather,
           glowHours,
           grain,
           light,
@@ -366,6 +400,9 @@ export default function App() {
           beforeId: BEFORE_ID,
         }),
       );
+    }
+    if (runPerimeters.length > 0) {
+      out.push(perimeterLayer({ perimeters: runPerimeters, initTime: dateFromInitTimeIdx(initTimeIdx), leadHours: leadTimeIdx, visible: showPerimeters, beforeId: BEFORE_ID }));
     }
     // if (fireList.length > 0) out.push(...fireLayers({ fires: fireList, initTime: dateFromInitTimeIdx(initTimeIdx), leadHours: leadTimeIdx, visible: showFires, beforeId: BEFORE_ID }));
     if (contourLines.length > 0) {
@@ -390,7 +427,7 @@ export default function App() {
   }, [
     showRaster, source, getTileData, colormapTexture, initTimeIdx, windMode, rasterVariable, selection, renderTile, rasterOpacity,
     leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity, zoom,
-    glowHours, grain, light, contourLines, pHide, pMax,
+    glowHours, grain, light, contourLines, pHide, pMax, ignScale, zLo, zHi, rankRamp, useWeather, runPerimeters, showPerimeters,
   ]);
 
   const status: Status = {
@@ -492,6 +529,23 @@ export default function App() {
         onPHideChange={setPHide}
         pMax={pMax}
         onPMaxChange={setPMax}
+        ignScale={ignScale}
+        onIgnScaleChange={setIgnScale}
+        zLo={zLo}
+        onZLoChange={setZLo}
+        zHi={zHi}
+        onZHiChange={setZHi}
+        qLo={qLo}
+        onQLoChange={setQLo}
+        qHi={qHi}
+        onQHiChange={setQHi}
+        rankRamp={rankRamp}
+        useWeather={useWeather}
+        onUseWeatherChange={setUseWeather}
+        showPerimeters={showPerimeters}
+        onShowPerimetersChange={setShowPerimeters}
+        perimeterCount={runPerimeters.length}
+        perimeterAcres={runPerimeters.reduce((a, f) => a + (f.properties.acres ?? 0), 0)}
 
         teacher={teacher}
         onTeacherChange={setTeacher}

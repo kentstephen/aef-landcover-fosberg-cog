@@ -3,6 +3,7 @@ import colormapsPngUrl from "@developmentseed/deck.gl-raster/gpu-modules/colorma
 import { useState } from "react";
 import type { Teacher } from "../aef/head.js";
 import { MOSAIC_MIN_ZOOM } from "../aef/mosaic.js";
+import { AEF_YEAR } from "../aef/mosaic.js";
 import { rampGradient } from "../aef/ramp.js";
 import type { WindMode } from "../ffwi/compute.js";
 import {
@@ -35,6 +36,8 @@ export type ColormapChoiceId = (typeof COLORMAP_CHOICES)[number]["id"];
 
 /** What the land cover layer draws: the ground lit by the hour's FFWI, the classes themselves, or nothing. */
 export type FuelChoice = "ignition" | "lit" | "cover" | "off";
+/** How the ignition head meets the ramp. */
+export type IgnScale = "probability" | "logit" | "rank";
 
 export type Status = {
   backend: "icechunk" | "zarr-v3" | null;
@@ -88,6 +91,25 @@ export type ControlPanelProps = {
   onPHideChange: (v: number) => void;
   pMax: number;
   onPMaxChange: (v: number) => void;
+  ignScale: IgnScale;
+  onIgnScaleChange: (v: IgnScale) => void;
+  zLo: number;
+  onZLoChange: (v: number) => void;
+  zHi: number;
+  onZHiChange: (v: number) => void;
+  qLo: number;
+  onQLoChange: (v: number) => void;
+  qHi: number;
+  onQHiChange: (v: number) => void;
+  /** The logit ramp the rank scale is using this hour, when known. */
+  rankRamp: [number, number] | null;
+  useWeather: boolean;
+  onUseWeatherChange: (v: boolean) => void;
+  showPerimeters: boolean;
+  onShowPerimetersChange: (v: boolean) => void;
+  /** Perimeters of fires discovered in the run's window, and their acres. */
+  perimeterCount: number;
+  perimeterAcres: number;
 
   teacher: Teacher;
   onTeacherChange: (t: Teacher) => void;
@@ -171,10 +193,10 @@ export function ControlPanel(p: ControlPanelProps) {
         invisible where it is low, viridis as it climbs.
       </p>
       <p className="muted small" style={{ marginTop: 6 }}>
-        Data: <A href="https://source.coop/tge-labs/aef">AlphaEarth Foundations 2025</A> (tge-labs on Source Cooperative) ·{" "}
+        Data: <A href="https://source.coop/tge-labs/aef">AlphaEarth Foundations {AEF_YEAR}</A> (tge-labs on Source Cooperative) ·{" "}
         <A href="https://dynamical.org/catalog/noaa-hrrr-forecast-48-hour/">NOAA HRRR 48 h</A> via{" "}
         <A href="https://dynamical.org">dynamical.org</A> ({s.backend === "icechunk" ? "Icechunk" : s.backend === "zarr-v3" ? "Zarr v3" : "opening"}) ·{" "}
-        <A href="https://www.frames.gov/catalog/27085">Fosberg 1978</A> · <A href="https://data-nifc.opendata.arcgis.com/">NIFC WFIGS</A> ignitions
+        <A href="https://www.frames.gov/catalog/27085">Fosberg 1978</A> · <A href="https://data-nifc.opendata.arcgis.com/">NIFC WFIGS</A> ignitions and perimeters
       </p>
 
       {loading ? (
@@ -209,13 +231,72 @@ export function ControlPanel(p: ControlPanelProps) {
         {p.fuel === "ignition" ? (
           <>
             <div className="ramp" role="img" aria-label="Viridis ramp" style={{ backgroundImage: rampGradient() }} />
-            <p className="muted small">Ignition probability, {Math.round(p.pHide * 100)}% (invisible) to {Math.round(p.pMax * 100)}% (ramp top). Held out by region the head scores 0.80 AUC (0.78 for lightning fires, 0.86 human); the weather alone 0.71, land cover alone 0.70.</p>
-            <Field label={`Hide below ${Math.round(p.pHide * 100)}%`}>
-              <Slider min={0} max={0.95} step={0.05} value={p.pHide} onChange={p.onPHideChange} label="Hide below" onReset={() => p.onPHideChange(0.5)} />
-            </Field>
-            <Field label={`Ramp top ${Math.round(p.pMax * 100)}%`}>
-              <Slider min={0.5} max={1} step={0.01} value={p.pMax} onChange={p.onPMaxChange} label="Ramp top" onReset={() => p.onPMaxChange(0.95)} />
-            </Field>
+            <div className="row">
+              <Seg
+                value={p.ignScale}
+                options={[
+                  { id: "probability", label: "Probability" },
+                  { id: "logit", label: "Logit" },
+                  { id: "rank", label: "Rank in view" },
+                ]}
+                onChange={p.onIgnScaleChange}
+              />
+              <Help label="Scale">
+                The head gives each pixel a logit: the ground's part (fixed) plus the hour's weather. Probability maps its
+                sigmoid onto the ramp, which saturates on a bad day (everything near 100%). Logit maps the sum itself, no
+                ceiling. Rank sets the ramp each hour from the pixels on screen, so the brightest fraction of the view is
+                always the ramp top whatever the weather: where does the fire land among its surroundings.
+              </Help>
+            </div>
+            {p.ignScale === "probability" ? (
+              <>
+                <p className="muted small">Ignition probability, {(p.pHide * 100).toFixed(p.pHide >= 0.99 ? 1 : 0)}% (invisible) to {(p.pMax * 100).toFixed(p.pMax >= 0.99 ? 1 : 0)}% (ramp top).</p>
+                <Field label={`Hide below ${(p.pHide * 100).toFixed(p.pHide >= 0.99 ? 1 : 0)}%`}>
+                  <Slider min={0} max={0.99} step={0.01} value={p.pHide} onChange={p.onPHideChange} label="Hide below" onReset={() => p.onPHideChange(0.5)} />
+                </Field>
+                <Field label={`Ramp top ${(p.pMax * 100).toFixed(p.pMax >= 0.99 ? 1 : 0)}%`}>
+                  <Slider min={0.5} max={0.999} step={0.001} value={p.pMax} onChange={p.onPMaxChange} label="Ramp top" onReset={() => p.onPMaxChange(0.95)} />
+                </Field>
+              </>
+            ) : p.ignScale === "logit" ? (
+              <>
+                <p className="muted small">Logit {p.zLo.toFixed(1)} (invisible) to {p.zHi.toFixed(1)} (ramp top); 0 is even odds against a control point, each +1 about e times the odds.</p>
+                <Field label={`Hide below ${p.zLo.toFixed(1)}`}>
+                  <Slider min={-6} max={8} step={0.1} value={p.zLo} onChange={p.onZLoChange} label="Hide below (logit)" onReset={() => p.onZLoChange(0)} />
+                </Field>
+                <Field label={`Ramp top ${p.zHi.toFixed(1)}`}>
+                  <Slider min={-4} max={12} step={0.1} value={p.zHi} onChange={p.onZHiChange} label="Ramp top (logit)" onReset={() => p.onZHiChange(4)} />
+                </Field>
+              </>
+            ) : (
+              <>
+                <p className="muted small">
+                  The ramp follows the view each hour: the {Math.round(p.qLo * 100)}th percentile of the pixels on screen is the hide line, the{" "}
+                  {(p.qHi * 100).toFixed(p.qHi >= 0.99 ? 1 : 0)}th the ramp top{p.rankRamp ? ` (now logit ${p.rankRamp[0].toFixed(1)} to ${p.rankRamp[1].toFixed(1)})` : ""}.
+                </p>
+                <Field label={`Hide below the ${Math.round(p.qLo * 100)}th percentile`}>
+                  <Slider min={0} max={0.95} step={0.05} value={p.qLo} onChange={p.onQLoChange} label="Hide percentile" onReset={() => p.onQLoChange(0.5)} />
+                </Field>
+                <Field label={`Ramp top at the ${(p.qHi * 100).toFixed(p.qHi >= 0.99 ? 1 : 0)}th percentile`}>
+                  <Slider min={0.5} max={0.999} step={0.001} value={p.qHi} onChange={p.onQHiChange} label="Top percentile" onReset={() => p.onQHiChange(0.99)} />
+                </Field>
+              </>
+            )}
+            <div className="row">
+              <Check checked={!p.useWeather} onChange={(v) => p.onUseWeatherChange(!v)} label="Ground alone (leave the hour's weather out)" />
+            </div>
+            <div className="row">
+              <Check
+                checked={p.showPerimeters}
+                onChange={p.onShowPerimetersChange}
+                label={`Burn perimeters of the fires that started in this window: ${p.perimeterCount} (${Math.round(p.perimeterAcres).toLocaleString()} acres)`}
+              />
+              <Help label="Perimeters">
+                The outline of the ground each fire took (NIFC WFIGS perimeters, {AEF_YEAR + 1}), drawn at the fire's discovery hour and held. An
+                end state, not the fire at that hour. Nothing is filled: the question is whether the ground inside was lit before the fire,
+                and the ground outside was not. The embeddings are {AEF_YEAR}, the year before.
+              </Help>
+            </div>
           </>
         ) : (
           <div className="row">

@@ -27,11 +27,12 @@ import tifffile
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = "https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/tge-labs/aef/v1/annual/aef_index.parquet"
-BASE = "https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/tge-labs/aef/v1/annual/2025/"
+YEAR = int(sys.argv[1]) if len(sys.argv) > 1 else 2025
+BASE = f"https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/tge-labs/aef/v1/annual/{YEAR}/"
 CONUS = (-125.0, 24.0, -66.9, 49.6)
 LEVELS = [1024, 512, 256, 128, 64, 32, 16]
 BLOCK = 1024
-OUT_JSON = ROOT / "web" / "public" / "aef-2025-conus.json"
+OUT_JSON = ROOT / "web" / "public" / f"aef-{YEAR}-conus.json"
 OUT_DIR = ROOT / "web" / "public"
 CACHE = ROOT / "data" / "aef_ranges_cache.jsonl"
 WORKERS = 8
@@ -78,14 +79,14 @@ def main():
         f"""
         select path, wgs84_west, wgs84_south, wgs84_east, wgs84_north, utm_zone, crs, utm_west, utm_south
         from read_parquet('{INDEX}')
-        where year = 2025 and wgs84_east > {CONUS[0]} and wgs84_west < {CONUS[2]}
+        where year = {YEAR} and wgs84_east > {CONUS[0]} and wgs84_west < {CONUS[2]}
           and wgs84_north > {CONUS[1]} and wgs84_south < {CONUS[3]}
         order by utm_zone, path
         """
     ).fetchall()
     files = []
     for path, w, s, e, n, zone, crs, uw, us in rows:
-        files.append(dict(rel=path.split("/annual/2025/", 1)[1], bbox=[round(w, 4), round(s, 4), round(e, 4), round(n, 4)], zone=zone, epsg=int(crs.split(":")[1]), uw=uw, us=us))
+        files.append(dict(rel=path.split(f"/annual/{YEAR}/", 1)[1], bbox=[round(w, 4), round(s, 4), round(e, 4), round(n, 4)], zone=zone, epsg=int(crs.split(":")[1]), uw=uw, us=us))
     print(f"{len(files)} files", flush=True)
 
     done = {}
@@ -120,8 +121,8 @@ def main():
             z["buf"] += struct.pack("<128I", *[v for o, c in blocks for v in (o, c)])
         tiles.append([f["rel"], *f["bbox"], f["zone"], ri, f["uw"], f["us"]])
     for zone, z in zones.items():
-        (OUT_DIR / f"aef-2025-ranges-{zone}.bin").write_bytes(bytes(z["buf"]))
-    OUT_JSON.write_text(json.dumps({"year": 2025, "base": BASE, "levels": LEVELS, "block": BLOCK, "zones": {k: {"epsg": v["epsg"], "n": v["n"]} for k, v in zones.items()}, "tiles": tiles}, separators=(",", ":")))
+        (OUT_DIR / f"aef-{YEAR}-ranges-{zone}.bin").write_bytes(bytes(z["buf"]))
+    OUT_JSON.write_text(json.dumps({"year": YEAR, "base": BASE, "levels": LEVELS, "block": BLOCK, "zones": {k: {"epsg": v["epsg"], "n": v["n"]} for k, v in zones.items()}, "tiles": tiles}, separators=(",", ":")))
     print(f"{len(tiles)} tiles -> {OUT_JSON} ({OUT_JSON.stat().st_size / 1024:.0f} KB); zones {', '.join(f'{k} {v['n']}' for k, v in zones.items())}")
 
 

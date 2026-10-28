@@ -1,6 +1,7 @@
+import { AEF_YEAR } from "./mosaic.js";
 /**
- * The browser's index of the AlphaEarth 2025 COGs over CONUS (web/public/aef-2025-conus.json and
- * one aef-2025-ranges-<zone>.bin per UTM zone, both from scripts/build_aef_index.py). The JSON has
+ * The browser's index of the AlphaEarth COGs of AEF_YEAR over CONUS (web/public/aef-<year>-conus.json and
+ * one aef-<year>-ranges-<zone>.bin per UTM zone, both from scripts/build_aef_index.py). The JSON has
  * every file's bounds; the binary has, per file, the byte range of each coarse overview level and
  * each band's block inside it, so a level is one range request with no header round trip.
  */
@@ -29,7 +30,7 @@ export const NUM_BANDS = 64;
 export const RECORD_BYTES = 7 * 8 + 7 * 64 * 8;
 
 export async function loadAefIndex(baseUrl: string): Promise<AefIndex> {
-  const r = await fetch(`${baseUrl}aef-2025-conus.json`);
+  const r = await fetch(`${baseUrl}aef-${AEF_YEAR}-conus.json`);
   if (!r.ok) throw new Error(`AEF index: HTTP ${r.status}`);
   const j = (await r.json()) as {
     base: string;
