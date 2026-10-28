@@ -88,6 +88,16 @@ export type ControlPanelProps = {
   onTeacherChange: (t: Teacher) => void;
   fuelOpacity: number;
   onFuelOpacityChange: (v: number) => void;
+  glowHours: number;
+  onGlowHoursChange: (v: number) => void;
+  grain: number;
+  onGrainChange: (v: number) => void;
+  light: boolean;
+  onLightChange: (v: boolean) => void;
+  relief: boolean;
+  onReliefChange: (v: boolean) => void;
+  contourStep: number;
+  onContourStepChange: (v: number) => void;
   zoom: number;
 
   windMode: WindMode;
@@ -202,6 +212,27 @@ export function ControlPanel(p: ControlPanelProps) {
         <Field label={`Opacity ${Math.round(p.fuelOpacity * 100)}%`}>
           <Slider min={0.05} max={1} step={0.05} value={p.fuelOpacity} onChange={p.onFuelOpacityChange} label="Ground opacity" onReset={() => p.onFuelOpacityChange(0.9)} />
         </Field>
+        <Field
+          label={
+            <span className="row">
+              <span>{p.glowHours === 0 ? "Afterglow: off (this hour only)" : `Afterglow: the brightest of the last ${p.glowHours} h, fading by fuel`}</span>
+              <Help label="Afterglow">
+                Each pixel shows the brightest hour behind it, faded by exp(-age / hold), with a hold per land cover: grass,
+                pasture and shrub let a windy hour go in about 3 to 6 h, timber holds it about a day, built ground and water hold
+                nothing. So the ground carries what the window has done to it, and timber stays lit after the grass goes dark.
+              </Help>
+            </span>
+          }
+        >
+          <Slider min={0} max={48} step={1} value={p.glowHours} onChange={p.onGlowHoursChange} label="Afterglow hours" onReset={() => p.onGlowHoursChange(24)} />
+        </Field>
+        <Field label={p.grain === 0 ? "Grain: off (flat fill)" : `Grain: ${p.grain} cells across a tile`}>
+          <Slider min={0} max={128} step={8} value={p.grain} onChange={p.onGrainChange} label="Grain" onReset={() => p.onGrainChange(0)} />
+        </Field>
+        <div className="row">
+          <Check checked={p.light} onChange={p.onLightChange} label="Draw as light (adds up over the map)" />
+          <Check checked={p.relief} onChange={p.onReliefChange} label="Relief under the ground" />
+        </div>
         {/* class legend with fuel weights, not shown while the classes themselves are not drawn
         <div className="legend">
           {head.classes.map((code, i) => (
@@ -238,7 +269,7 @@ export function ControlPanel(p: ControlPanelProps) {
           label={
             <span className="row">
               <span>+<span style={{ display: "inline-block", minWidth: "2ch", textAlign: "right" }}>{hours}</span> h · {validStr}</span>
-              <Help label="Forecast hour">49 hourly steps, +0 to +48 h. Space toggles play. The run opens on the Marshall Fire day (2021-12-30, 12Z run, +6 h is late morning in Colorado); pick any date, or jump to the latest run.</Help>
+              <Help label="Forecast hour">49 hourly steps, +0 to +48 h, playing on open. Space toggles play. The run opens on the Southern Plains outbreak (2025-03-14, 12Z run; the wind peaks that afternoon from Texas to Kansas); pick any date, or jump to the latest run.</Help>
             </span>
           }
         >
@@ -255,8 +286,11 @@ export function ControlPanel(p: ControlPanelProps) {
       </Fold>
 
       <Fold k="field" label="The weather" defaultOpen tag={fieldOptions.find((o) => o.id === field)?.label}>
+        <Field label={p.contourStep === 0 ? "Contours: off" : `Contours of the FFWI field every ${p.contourStep}, from the hide line up`}>
+          <Slider min={0} max={50} step={5} value={p.contourStep} onChange={p.onContourStepChange} label="Contour step" onReset={() => p.onContourStepChange(0)} />
+        </Field>
         <div className="row">
-          <span className="muted small">Draw the 3 km field itself:</span>
+          <span className="muted small">Draw the 3 km field itself (puts the ground off; one picture at a time):</span>
           <Help label="FFWI">
             Fosberg 1978. Temperature and humidity set how dry fine fuel is; wind does the escalating; bone-dry fuel in a 30 mph
             wind = 100. Sustained 10 m wind is the standard input. 3 km HRRR pixels, reprojected on the GPU.

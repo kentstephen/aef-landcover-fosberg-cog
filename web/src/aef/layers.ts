@@ -36,6 +36,8 @@ export type AefTile = {
   grid: WeatherGrid;
   ffwiTex: Texture;
   bbox: [number, number, number, number];
+  /** Tile width in ground meters. */
+  extentM: number;
   /** Pixel index under a lon/lat, or -1. */
   pixelAt: (lon: number, lat: number) => number;
   gone?: boolean;
@@ -49,6 +51,12 @@ export type AefLayerOpts = {
   leadTimeIdx: number;
   hideBelow: number;
   rescaleMax: number;
+  /** Hours of afterglow (0 = this hour only). */
+  glowHours: number;
+  /** Grain cells across a tile (0 = flat fill). */
+  grain: number;
+  /** Draw as light: additive over the map, so bright ground adds up instead of covering. */
+  light: boolean;
   opacity: number;
   beforeId?: string;
   visible: boolean;
@@ -156,6 +164,7 @@ export class AefLayers {
       grid,
       ffwiTex: weatherTexture(device, grid, this.cache),
       bbox,
+      extentM,
       pixelAt,
     };
     const old = this.live.get(key);
@@ -235,6 +244,8 @@ export class AefLayers {
       layerIndex: o.leadTimeIdx,
       hideBelow: o.hideBelow,
       rescaleMax: o.rescaleMax,
+      glowHours: o.glowHours,
+      grain: o.grain,
     });
   };
 
@@ -246,7 +257,7 @@ export class AefLayers {
     this.opts = opts;
     // debug hook for the headless probe (this instance is the one deck draws from)
     (globalThis as unknown as { __aef?: unknown }).__aef = { layers: this, cache: this.cache };
-    const key = `${opts.mode}|${opts.teacher}|${opts.leadTimeIdx}|${opts.hideBelow}|${opts.rescaleMax}`;
+    const key = `${opts.mode}|${opts.teacher}|${opts.leadTimeIdx}|${opts.hideBelow}|${opts.rescaleMax}|${opts.glowHours}|${opts.grain}`;
     if (key !== this.lastKey) {
       this.lastKey = key;
       this.version++;
@@ -259,6 +270,9 @@ export class AefLayers {
       updateTriggers: { renderTile: [v] },
       onTileUnload: this.onUnload,
       beforeId: opts.beforeId,
+      parameters: opts.light && opts.mode === "lit"
+        ? { blend: true, blendColorOperation: "add", blendColorSrcFactor: "src-alpha", blendColorDstFactor: "one", blendAlphaOperation: "add", blendAlphaSrcFactor: "one", blendAlphaDstFactor: "one-minus-src-alpha" }
+        : {},
     };
     const coarse = new RasterTileLayer<AefTile>({
       id: "aef-coarse",

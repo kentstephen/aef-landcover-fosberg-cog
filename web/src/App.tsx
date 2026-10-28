@@ -5,6 +5,7 @@ import {
 } from "@developmentseed/deck.gl-raster/gpu-modules";
 import colormapsPngUrl from "@developmentseed/deck.gl-raster/gpu-modules/colormaps.png";
 import { ZarrLayer } from "@developmentseed/deck.gl-zarr";
+import { PathLayer } from "@deck.gl/layers";
 import type { Device, Texture } from "@luma.gl/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MapRef } from "react-map-gl/maplibre";
@@ -22,6 +23,7 @@ import { makeGetTileData, type FfwiTileData } from "./hrrr/get-tile-data.js";
 import { dateFromInitTimeIdx, HRRR_GEOZARR_ATTRS, HRRR_LEAD_TIME_COUNT, initTimeIdxFromDate, lonLatToHrrrPixel } from "./hrrr/metadata.js";
 import { makeRenderTile } from "./hrrr/render-tile.js";
 import { buildSelection } from "./hrrr/selection.js";
+import { type ContourPath, ffwiContours } from "./hrrr/contours.js";
 import { SideChannel } from "./hrrr/side-channel.js";
 import { openHrrr, type HrrrSource } from "./hrrr/store.js";
 import { FfwiTileCache } from "./hrrr/tile-cache.js";
@@ -34,13 +36,44 @@ const MAP_STYLE_URL = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/sty
 const BEFORE_ID = "aeroway-runway";
 const INITIAL_FRAME_MS = 300;
 /**
- * Opens on the Marshall Fire: 2021-12-30, downslope winds over cured grass at the Boulder County
- * foothills, Denver's built ground beside it. The 12Z run, +6 h = late morning local, when the
- * wind peaked. A past day with contrast between open fuel, forest and city.
+ * Opens on the whole country for the Southern Plains outbreak of March 14, 2025: a deep cyclone
+ * over the Plains, extreme wind and single-digit humidity from Texas through Oklahoma and Kansas
+ * into the Mid-South, the widest fire weather day of the year the 2025 embeddings share. The 12Z
+ * run, playing from +0 h, so the afternoon peak comes up over the first frames and the afterglow
+ * carries it into the 15th.
  */
-const START_VIEW = { longitude: -105.14, latitude: 39.94, zoom: 10.3 };
-const START_INIT = new Date("2021-12-30T12:00:00Z");
-const START_LEAD = 6;
+const START_VIEW = { longitude: -97, latitude: 38, zoom: 4.6 };
+const START_INIT = new Date("2025-03-14T12:00:00Z");
+const START_LEAD = 0;
+/** Terrain under the ground: AWS Terrain Tiles (Mapzen Terrarium), public, 256 px, to zoom 15. */
+const DEM_TILES = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
+const HILLSHADE_ID = "aef-hillshade";
+
+/** Relief under everything: a hillshade layer from the terrain tiles, below the first data layer. */
+function addHillshade(map: import("maplibre-gl").Map, on: boolean) {
+  if (!map.getSource("aef-dem")) {
+    map.addSource("aef-dem", { type: "raster-dem", tiles: [DEM_TILES], encoding: "terrarium", tileSize: 256, maxzoom: 15 });
+  }
+  if (!map.getLayer(HILLSHADE_ID)) {
+    const before = map.getLayer("aef-coarse") ? "aef-coarse" : BEFORE_ID;
+    map.addLayer(
+      {
+        id: HILLSHADE_ID,
+        type: "hillshade",
+        source: "aef-dem",
+        paint: {
+          "hillshade-shadow-color": "#000000",
+          "hillshade-highlight-color": "#9aa7b8",
+          "hillshade-accent-color": "#000000",
+          "hillshade-exaggeration": 0.55,
+          "hillshade-illumination-direction": 335,
+        },
+      },
+      before,
+    );
+  }
+  map.setLayoutProperty(HILLSHADE_ID, "visibility", on ? "visible" : "none");
+}
 
 export default function App() {
   const mapRef = useRef<MapRef>(null);
@@ -109,7 +142,7 @@ export default function App() {
 
   // ---- animation
   const [leadTimeIdx, setLeadTimeIdx] = useState(START_LEAD);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [isPlaying, setIsPlaying] = useState(true);
   const [frameDurationMs, setFrameDurationMs] = useState(INITIAL_FRAME_MS);
   useEffect(() => {
     if (!isPlaying) return;
@@ -145,7 +178,8 @@ export default function App() {
   const [rescaleMax, setRescaleMax] = useState(100);
   /** Below this nothing is drawn (ground or field). */
   const [hideBelow, setHideBelow] = useState(20);
-  const [showRaster, setShowRaster] = useState(false);
+  const [showRasterState, setShowRasterState] = useState(false);
+  const showRaster = showRasterState;
   const [rasterOpacity, setRasterOpacity] = useState(0.7);
   const [rasterVariable, setRasterVariable] = useState<RasterVariable>("ffwi");
   const varDef = RASTER_VARIABLES[rasterVariable];
@@ -157,10 +191,37 @@ export default function App() {
   useEffect(() => {
     cacheRef.current.setTau(tauHours);
   }, [tauHours]);
-  const [fuel, setFuel] = useState<FuelChoice>("lit");
+  const [fuel, setFuelState] = useState<FuelChoice>("lit");
+  // one picture at a time: drawing the field puts the ground off, and the ground back on puts the field away
+  const setShowRaster = useCallback((on: boolean) => {
+    setShowRasterState(on);
+    if (on) setFuelState("off");
+  }, []);
+  const setFuel = useCallback((f: FuelChoice) => {
+    setFuelState(f);
+    if (f !== "off") setShowRasterState(false);
+  }, []);
   const [teacher, setTeacher] = useState<Teacher>("nlcd");
   const [fuelOpacity, setFuelOpacity] = useState(0.9);
+  /** Hours of afterglow on the ground (0 = this hour only). */
+  const [glowHours, setGlowHours] = useState(24);
+  /** Grain cells across a tile (0 = flat fill). */
+  const [grain, setGrain] = useState(0);
+  /** The ground drawn as light (additive) rather than paint. */
+  const [light, setLight] = useState(false);
+  const [relief, setRelief] = useState(true);
+  /** Contours of the FFWI field over the ground (0 = none). */
+  const [contourStep, setContourStep] = useState(0);
   const [zoom, setZoom] = useState(START_VIEW.zoom);
+  const [view, setView] = useState<[number, number, number, number] | null>(null);
+  const readView = (m: import("maplibre-gl").Map) => {
+    const b = m.getBounds();
+    setView([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+  };
+  useEffect(() => {
+    const m = mapRef.current?.getMap();
+    if (m && m.isStyleLoaded()) addHillshade(m, relief);
+  }, [relief]);
 
   const [device, setDevice] = useState<Device | null>(null);
   const [colormapImage, setColormapImage] = useState<ImageData | null>(null);
@@ -220,6 +281,15 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hover, leadTimeIdx, cacheVersion, aefLayers, aefVersion, teacher]);
 
+  // ---- contours of the field: recomputed when the hour, the weather, the view or the lag changes
+  const contourLines = useMemo<ContourPath[]>(() => {
+    if (!view || contourStep <= 0) return [];
+    const levels: number[] = [];
+    for (let v = Math.max(contourStep, hideBelow); v <= 200; v += contourStep) levels.push(v);
+    return ffwiContours(cacheRef.current, leadTimeIdx, view, levels);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, contourStep, hideBelow, leadTimeIdx, cacheVersion, tauHours]);
+
   // ---- layers
   const selection = useMemo(() => buildSelection(initTimeIdx), [initTimeIdx]);
   const getTileData = useMemo(
@@ -272,10 +342,29 @@ export default function App() {
           leadTimeIdx,
           hideBelow,
           rescaleMax,
+          glowHours,
+          grain,
+          light,
           opacity: fuelOpacity,
           visible: fuel !== "off",
           beforeId: BEFORE_ID,
         }),
+      );
+    }
+    if (contourLines.length > 0) {
+      out.push(
+        new PathLayer<ContourPath>({
+          id: "ffwi-contours",
+          data: contourLines,
+          getPath: (d: ContourPath) => d.path,
+          getColor: (d: ContourPath) => [226, 236, 255, Math.min(255, 90 + d.level * 1.4)],
+          getWidth: (d: ContourPath) => 0.6 + d.level / 60,
+          widthUnits: "pixels",
+          jointRounded: true,
+          capRounded: true,
+          beforeId: BEFORE_ID,
+          updateTriggers: { getColor: [contourLines], getWidth: [contourLines] },
+        } as never),
       );
     }
     return out;
@@ -284,6 +373,7 @@ export default function App() {
   }, [
     showRaster, source, getTileData, colormapTexture, initTimeIdx, windMode, rasterVariable, selection, renderTile, rasterOpacity,
     leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity, zoom,
+    glowHours, grain, light, contourLines,
   ]);
 
   const status: Status = {
@@ -322,8 +412,13 @@ export default function App() {
         hash
         mapStyle={MAP_STYLE_URL}
         attributionControl={false}
-        onLoad={(e) => setZoom(e.target.getZoom())}
+        onLoad={(e) => {
+          setZoom(e.target.getZoom());
+          addHillshade(e.target, relief);
+          readView(e.target);
+        }}
         onMove={(e) => setZoom(e.viewState.zoom)}
+        onMoveEnd={(e) => readView(e.target)}
         onMouseMove={(e) => setHover({ lon: e.lngLat.lng, lat: e.lngLat.lat, x: e.point.x, y: e.point.y })}
         onMouseOut={() => setHover(null)}
       >
@@ -380,6 +475,16 @@ export default function App() {
         onTeacherChange={setTeacher}
         fuelOpacity={fuelOpacity}
         onFuelOpacityChange={setFuelOpacity}
+        glowHours={glowHours}
+        onGlowHoursChange={setGlowHours}
+        grain={grain}
+        onGrainChange={setGrain}
+        light={light}
+        onLightChange={setLight}
+        relief={relief}
+        onReliefChange={setRelief}
+        contourStep={contourStep}
+        onContourStepChange={setContourStep}
         zoom={zoom}
         windMode={windMode}
         onWindModeChange={setWindMode}
