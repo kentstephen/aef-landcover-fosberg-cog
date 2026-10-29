@@ -18,7 +18,7 @@ import {
 } from "../hrrr/metadata.js";
 import { type RasterVariable } from "../hrrr/variables.js";
 // import { RASTER_VARIABLES, windLabel } from "../hrrr/variables.js";
-import { HOURS_PER_DAY, type DayState } from "../hrrr/week.js";
+import { HOURS_PER_DAY, RUN_HOUR_UTC, type DayState } from "../hrrr/week.js";
 import { A, Check, Field, Fold, Help, Seg, Slider } from "./controls.js";
 // import { Ramp } from "./controls.js";
 import "./panel.css";
@@ -48,7 +48,7 @@ export type IgnScale = "probability" | "logit" | "rank";
 /** The time axis: one 48 h forecast run, or a week of daily 12Z runs stitched hour by hour. */
 export type TimeMode = "run" | "week";
 /** The longest window: each day is about 430 MB over the wire for the whole country, 90 MB of bytes in memory. */
-export const MAX_WEEK_DAYS = 14;
+export const MAX_WEEK_DAYS = 7;
 
 export type Status = {
   backend: "icechunk" | "zarr-v3" | null;
@@ -85,7 +85,7 @@ export function loadingSummary(s: Status): { fraction: number; label: string } |
   if (s.aefReading > 0) {
     total += s.aefReading + s.aefDone;
     done += s.aefDone;
-    parts.push(`land cover ${s.aefDone} / ${s.aefReading + s.aefDone}`);
+    parts.push(`embeddings ${s.aefDone} / ${s.aefReading + s.aefDone}`);
   }
   if (s.weekWanted > s.weekDone) {
     total += s.weekWanted;
@@ -208,12 +208,21 @@ export function ControlPanel(p: ControlPanelProps) {
   const reader = p.zoom >= MOSAIC_MIN_ZOOM ? "10 m mosaic" : "COG overviews";
   const weekEnd = new Date(p.weekStart.getTime());
   weekEnd.setUTCDate(weekEnd.getUTCDate() + p.weekDays - 1);
+  /** The latest day whose 12Z run is in the store (the latest init, or the day before it when it is an earlier run). */
+  const latestDay = (() => {
+    if (p.initTimeCount === 0) return null;
+    const t = dateFromInitTimeIdx(p.initTimeCount - 1);
+    const d = new Date(Date.UTC(t.getUTCFullYear(), t.getUTCMonth(), t.getUTCDate()));
+    if (t.getUTCHours() < RUN_HOUR_UTC) d.setUTCDate(d.getUTCDate() - 1);
+    return d;
+  })();
+  const onLatestDay = latestDay !== null && weekEnd.getTime() === latestDay.getTime();
   /** The ramp's two ends and what they are, for the collapsed card's legend. */
   const legendEnds: [string, string, string] =
     p.fuel === "counties"
-      ? ["0%", "100%", "of the county's ground lit"]
+      ? ["0%", "100%", "ignition risk by county"]
       : p.ignScale === "probability"
-      ? [`${Math.round(p.pHide * 100)}%`, `${(p.pMax * 100).toFixed(p.pMax >= 0.99 ? 1 : 0)}%`, "ignition probability"]
+      ? [`${Math.round(p.pHide * 100)}%`, `${(p.pMax * 100).toFixed(p.pMax >= 0.99 ? 1 : 0)}%`, "ignition risk"]
       : p.ignScale === "logit"
         ? [p.zLo.toFixed(1), p.zHi.toFixed(1), "ignition logit"]
         : [`p${Math.round(p.qLo * 100)}`, `p${(p.qHi * 100).toFixed(p.qHi >= 0.99 ? 1 : 0)}`, "rank in view"];
@@ -257,9 +266,11 @@ export function ControlPanel(p: ControlPanelProps) {
       <p>
         Every pixel's <b>AlphaEarth embedding</b> goes through a small head fit on 22,000 real wildfire ignitions (WFIGS, 2019
         to 2026) against points 20 to 30 km away at other hours, together with the hour's weather from NOAA's HRRR
-        forecast (Fosberg index, temperature, humidity, wind). The map plays the head's ignition probability
-        hour by hour over a week of daily forecasts, or over one 48 h run: the ground in gray all the time, in color where
-        the weather lifts it.
+        forecast (Fosberg index, temperature, humidity, wind). The map plays the head's ignition risk
+        hour by hour over a window of up to a week of daily forecasts: the ground in gray all the time, in color where
+        the weather lifts it. This is a risk outlook, not a detection: nothing here shows an actual fire, and the colors
+        mean a higher or lower chance of a start, never that one has happened.
+        
       </p>
       <p className="muted small" style={{ marginTop: 6 }}>
         Data: <A href="https://source.coop/tge-labs/aef">AlphaEarth Foundations {AEF_YEAR}</A> (tge-labs on Source Cooperative) ·{" "}
@@ -275,12 +286,12 @@ export function ControlPanel(p: ControlPanelProps) {
         </div>
       ) : null}
 
-      <Fold k="fuel" label="The ground" defaultOpen tag={p.fuel === "ignition" ? "ignition" : p.fuel === "counties" ? "counties" : p.fuel === "lit" ? "lit by FFWI" : p.fuel === "cover" ? "land cover" : "off"}>
+      <Fold k="fuel" label="The ground" defaultOpen tag={p.fuel === "ignition" ? "ignition risk" : p.fuel === "counties" ? "counties" : p.fuel === "lit" ? "lit by FFWI" : p.fuel === "cover" ? "land cover" : "off"}>
         <div className="row">
           <Seg
             value={p.fuel}
             options={[
-              { id: "ignition", label: "Ignition" },
+              { id: "ignition", label: "Risk" },
               { id: "counties", label: "Counties" },
               // the land cover lit by FFWI x fuel weight, the classes themselves, and off: not offered; G toggles the two
               // { id: "lit", label: "Lit by FFWI" },
@@ -301,8 +312,9 @@ export function ControlPanel(p: ControlPanelProps) {
         {p.fuel === "counties" ? (
           <div className="counties">
             <p className="muted small">
-              The pixel picture by county: the share of the county's 2.6 km overview pixels the raster lights this hour
-              (the weather over the gate and the sum over the hide line), 0 clear to all of it at the ramp top. Starts today is the sum of the calibrated rate over
+              The pixel picture by county: the share of the county's 2.6 km overview pixels at elevated risk this hour
+              (the weather over the gate and the model score over the hide line), 0 clear to all of it at the ramp top.
+              A share of area, not a probability: 100% means the whole county is above the line, not that anything is burning. Starts today is the sum of the calibrated rate over
               the county's land.
               {p.countyProgress ? ` Ground summed for ${p.countyProgress[0]} of ${p.countyProgress[1]} files.` : ""}
             </p>
@@ -311,7 +323,7 @@ export function ControlPanel(p: ControlPanelProps) {
                 <thead>
                   <tr>
                     <th>county in view</th>
-                    <th>ground lit</th>
+                    <th>ground at risk</th>
                     <th>starts today</th>
                   </tr>
                 </thead>
@@ -357,12 +369,12 @@ export function ControlPanel(p: ControlPanelProps) {
                 The head gives each pixel a logit: the ground's part (fixed) plus the hour's weather. Probability maps its
                 sigmoid onto the ramp, which saturates on a bad day (everything near 100%). Logit maps the sum itself, no
                 ceiling. Rank sets the ramp each hour from the pixels on screen, so the brightest fraction of the view is
-                always the ramp top whatever the weather: where does the fire land among its surroundings.
+                always the ramp top whatever the weather: where does the risk land among its surroundings.
               </Help>
             </div>
             {p.ignScale === "probability" ? (
               <>
-                <p className="muted small">Ignition probability, {(p.pHide * 100).toFixed(p.pHide >= 0.99 ? 1 : 0)}% (invisible) to {(p.pMax * 100).toFixed(p.pMax >= 0.99 ? 1 : 0)}% (ramp top).</p>
+                <p className="muted small">Ignition risk (model score), {(p.pHide * 100).toFixed(p.pHide >= 0.99 ? 1 : 0)}% (invisible) to {(p.pMax * 100).toFixed(p.pMax >= 0.99 ? 1 : 0)}% (ramp top).</p>
                 <Field label={`Hide below ${(p.pHide * 100).toFixed(p.pHide >= 0.99 ? 1 : 0)}%`}>
                   <Slider min={0} max={0.99} step={0.01} value={p.pHide} onChange={p.onPHideChange} label="Hide below" onReset={() => p.onPHideChange(0.5)} />
                 </Field>
@@ -494,21 +506,13 @@ export function ControlPanel(p: ControlPanelProps) {
 
       <Fold k="time" label="Time" defaultOpen tag={timeTag}>
         <div className="row">
-          <Seg
-            value={p.timeMode}
-            options={[
-              { id: "week", label: "A week" },
-              { id: "run", label: "One 48 h run" },
-            ]}
-            onChange={p.onTimeModeChange}
-          />
+          {/* the single 48 h run mode is not offered; the code path stays (timeMode "run") */}
           <Help label="Time">
-            A week: one 12Z HRRR run per day, its first 24 hours each, stitched into one hourly film, fetched as you watch:
-            only the shards under the view, the day on screen first, then the days after it. Play runs over the days in
-            hand and wraps there until the rest arrive; the strip under the slider shows which days are in. About 18 MB
-            per shard per day over the wire, kept as 4 MB of bytes in memory and not written to disk: a region is 25 to
-            100 MB, the whole country about 3 GB over the wire and 640 MB in memory. One run: the 49 hours of a single
-            forecast.
+            The window: one 12Z HRRR run per day, its first 24 hours each, stitched into one hourly film, up to a week,
+            fetched as you watch: only the shards under the view, the day on screen first, then the days after it. Play
+            runs over the days in hand and wraps there until the rest arrive; the strip under the slider shows which days
+            are in. About 18 MB per shard per day over the wire, kept as 4 MB of bytes in memory and not written to disk:
+            a region is 25 to 100 MB, a whole week over the whole country about 3 GB over the wire and 640 MB in memory.
           </Help>
         </div>
         {p.timeMode === "week" ? (
@@ -546,9 +550,27 @@ export function ControlPanel(p: ControlPanelProps) {
                     p.onWeekDaysChange(Math.max(1, Math.min(MAX_WEEK_DAYS, days)));
                   }}
                 />
+                {latestDay !== null && !onLatestDay ? (
+                  <a
+                    href="#"
+                    className="small"
+                    onClick={(e) => {
+                      e.preventDefault();
+                      // the window ends on the latest day in the store; the playhead goes to that day's first hour
+                      const start = new Date(latestDay.getTime());
+                      start.setUTCDate(start.getUTCDate() - (p.weekDays - 1));
+                      p.onWeekStartChange(start);
+                      p.onHourIdxChange((p.weekDays - 1) * HOURS_PER_DAY);
+                    }}
+                  >
+                    Current forecast
+                  </a>
+                ) : latestDay !== null ? (
+                  <span className="muted small">latest in the store</span>
+                ) : null}
               </div>
             </Field>
-            <div className="days" role="list" aria-label="Days of the week in hand">
+            <div className="days" role="list" aria-label="Days of the window in hand">
               {Array.from({ length: p.weekDays }, (_, d) => {
                 const st = p.weekDayStates[d] ?? "waiting";
                 const date = new Date(p.weekStart.getTime());
@@ -578,8 +600,8 @@ export function ControlPanel(p: ControlPanelProps) {
                 <Slider min={0} max={Math.max(0, p.weekDepth - 1)} step={1} value={p.hourIdx} onChange={p.onHourIdxChange} label="Week hour" onReset={() => p.onHourIdxChange(0)} />
               </div>
             </Field>
-            <Field label={`Seconds per hour: ${(p.frameDurationMs / 1000).toFixed(2)} (the week in ${Math.round((p.frameDurationMs * p.weekDepth) / 1000)} s)`}>
-              <Slider min={40} max={1000} step={20} value={p.frameDurationMs} onChange={p.onFrameDurationMsChange} label="Frame duration" onReset={() => p.onFrameDurationMsChange(100)} />
+            <Field label={`Seconds per hour: ${(p.frameDurationMs / 1000).toFixed(2)} (the window in ${Math.round((p.frameDurationMs * p.weekDepth) / 1000)} s)`}>
+              <Slider min={40} max={1000} step={20} value={p.frameDurationMs} onChange={p.onFrameDurationMsChange} label="Frame duration" onReset={() => p.onFrameDurationMsChange(200)} />
             </Field>
           </>
         ) : (
@@ -617,7 +639,7 @@ export function ControlPanel(p: ControlPanelProps) {
           </div>
         </Field>
         <Field label={`Seconds per forecast hour: ${(p.frameDurationMs / 1000).toFixed(2)}`}>
-          <Slider min={80} max={1000} step={20} value={p.frameDurationMs} onChange={p.onFrameDurationMsChange} label="Frame duration" onReset={() => p.onFrameDurationMsChange(100)} />
+          <Slider min={80} max={1000} step={20} value={p.frameDurationMs} onChange={p.onFrameDurationMsChange} label="Frame duration" onReset={() => p.onFrameDurationMsChange(200)} />
         </Field>
           </>
         )}

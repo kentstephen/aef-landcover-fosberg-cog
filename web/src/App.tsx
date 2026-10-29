@@ -45,7 +45,7 @@ const MAP_STYLE_URL = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/sty
 /** First basemap layer above water in CARTO styles; data goes under roads/labels. */
 const BEFORE_ID = "aeroway-runway";
 /** 100 ms a frame: a week in 17 s. */
-const INITIAL_FRAME_MS = 100;
+const INITIAL_FRAME_MS = 200; // 72 hours in about 14 s
 /**
  * Opens on the whole country. The single-run mode opens on the 12Z run of August 1, 2026, the day of
  * Washington's first PDS red flag warning, playing from +0 h so the afternoon peak comes up over the first
@@ -56,14 +56,15 @@ const START_VIEW = { longitude: -97, latitude: 38, zoom: 4.6 };
 const START_INIT = new Date("2026-08-10T12:00:00Z");
 const START_LEAD = 0;
 /**
- * The week the map opens on, over the whole country: August 3 to 10, 2026, eight days in the heart of the
- * interior West's season, hot and dry every afternoon. The ground is the 2025 embeddings. (By the HRRR
+ * The week the map opens on, over the whole country: August 7 to 9, 2026, three days in the heart of the
+ * interior West's season, hot and dry every afternoon. Three days rather than a full week because the whole
+ * country's shards take minutes to arrive. The ground is the 2025 embeddings. (By the HRRR
  * analysis, ignition/rank_weeks.py, the head's weather term over a sample of the country: July 26 to
  * August 1 had the most area-hours above the gate; August 20 was the single widest day; April 21 and 22
  * were the High Plains wind days; February 17 the Ranger Road day.)
  */
-const START_WEEK = new Date("2026-08-03T00:00:00Z");
-const START_DAYS = 8;
+const START_WEEK = new Date("2026-08-07T00:00:00Z");
+const START_DAYS = 3;
 /** Terrain under the ground: AWS Terrain Tiles (Mapzen Terrarium), public, 256 px, to zoom 15. */
 const DEM_TILES = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 const HILLSHADE_ID = "aef-hillshade";
@@ -224,7 +225,10 @@ export default function App() {
       else if (pick) {
         // the tooltip under the cursor on or off (off for a clean recording)
         pickRef.current = !pickRef.current;
-        if (!pickRef.current) setHover(null);
+        if (!pickRef.current) {
+          setHover(null);
+          setCountyHover(null);
+        }
       } else if (labels) {
         // the basemap's text and icons (every symbol layer of the style) on or off
         const m = mapRef.current?.getMap();
@@ -629,7 +633,7 @@ export default function App() {
           visible: true,
           beforeId: BEFORE_ID,
           trigger: [h0, hourFrac, countyVersion, wv, zHideCounty, wxGate, groundRamp],
-          onHover: (i, x, y) => setCountyHover(i < 0 ? null : { i, x, y }),
+          onHover: (i, x, y) => setCountyHover(i < 0 || !pickRef.current ? null : { i, x, y }),
         }),
       );
     }
@@ -676,6 +680,8 @@ export default function App() {
   };
   const loading = loadingSummary(status);
 
+  /** The model score in words: low below the hide line, elevated from there, high in the top band. */
+  const riskWord = (p: number, hide: number) => (!Number.isFinite(p) ? "unknown" : p < hide ? "low" : p < 0.8 ? "elevated" : "high");
   const tooltipStyle = (x: number, y: number): React.CSSProperties => ({
     position: "absolute",
     left: x + 14,
@@ -688,7 +694,8 @@ export default function App() {
     padding: "6px 9px",
     borderRadius: 6,
     zIndex: 2000,
-    whiteSpace: "nowrap",
+    maxWidth: 300,
+    whiteSpace: "normal",
   });
 
   const runLabel = source ? dateFromInitTimeIdx(initTimeIdx).toISOString().slice(0, 13).replace("T", " ") + "Z" : "";
@@ -843,7 +850,7 @@ export default function App() {
           </div>
           <div>
             {Number.isFinite(countyInfo.share)
-              ? `${Math.round(countyInfo.share * 100)}% of its ground lit this hour (weather over the gate, sum over the hide line)`
+              ? `elevated ignition risk over ${Math.round(countyInfo.share * 100)}% of its ground this hour (a share of area, not a chance of fire)`
               : countyInfo.covered
                 ? "forecast not loaded here yet"
                 : "ground not summed yet"}
@@ -862,7 +869,7 @@ export default function App() {
         <div style={tooltipStyle(hover.x, hover.y)}>
           <div style={{ fontWeight: 600 }}>
             {hoverInfo.ground
-              ? `ignition ${Number.isFinite(hoverInfo.ignP) ? `${Math.round(hoverInfo.ignP * 100)}%` : "?"} this hour · ground alone ${Math.round(hoverInfo.groundP * 100)}%${Number.isFinite(hoverInfo.wx0) ? ` · weather term ${hoverInfo.wx0 >= 0 ? "+" : ""}${hoverInfo.wx0.toFixed(1)}` : ""}`
+              ? `ignition risk ${riskWord(hoverInfo.ignP, pHide)} this hour (score ${Number.isFinite(hoverInfo.ignP) ? `${Math.round(hoverInfo.ignP * 100)}%` : "?"}) · ground alone ${Math.round(hoverInfo.groundP * 100)}%${Number.isFinite(hoverInfo.wx0) ? ` · weather term ${hoverInfo.wx0 >= 0 ? "+" : ""}${hoverInfo.wx0.toFixed(1)}` : ""}`
               : "no embedding here"}
           </div>
           <div style={{ color: "#bbb" }}>

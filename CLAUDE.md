@@ -43,7 +43,7 @@ maps), then the TypeScript map.
 
 ## Status (2026-10-29, after the calibration check)
 
-- Opens on August 3 to 10, 2026 (8 days), the single run on August 10 12Z.
+- Opens on August 7 to 9, 2026 (3 days; the full week took too long to arrive). The time panel offers one window of up to 7 days; the single 48 h run mode is no longer offered (code path kept, timeMode "run").
 - Tooltip reads the head's logit in real units (`web/src/aef/calibration.ts`: the offset from
   `models/ignition_calibration.json`, times the class's observed/expected ratio): "about 0.02 per
   1000 km2 per day, 2.2x the CONUS mean". The picture (ramp, gate) does not use the calibration.
