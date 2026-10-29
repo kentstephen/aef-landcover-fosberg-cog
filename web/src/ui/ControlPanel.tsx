@@ -202,6 +202,13 @@ export function ControlPanel(p: ControlPanelProps) {
   const reader = p.zoom >= MOSAIC_MIN_ZOOM ? "10 m mosaic" : "COG overviews";
   const weekEnd = new Date(p.weekStart.getTime());
   weekEnd.setUTCDate(weekEnd.getUTCDate() + p.weekDays - 1);
+  /** The ramp's two ends and what they are, for the collapsed card's legend. */
+  const legendEnds: [string, string, string] =
+    p.ignScale === "probability"
+      ? [`${Math.round(p.pHide * 100)}%`, `${(p.pMax * 100).toFixed(p.pMax >= 0.99 ? 1 : 0)}%`, "ignition probability"]
+      : p.ignScale === "logit"
+        ? [p.zLo.toFixed(1), p.zHi.toFixed(1), "ignition logit"]
+        : [`p${Math.round(p.qLo * 100)}`, `p${(p.qHi * 100).toFixed(p.qHi >= 0.99 ? 1 : 0)}`, "rank in view"];
   const timeTag = p.timeMode === "week" ? p.weekHourLabel : `+${hours} h · ${validStr}`;
   // the HRRR field fold is commented out below
   // const rv = RASTER_VARIABLES[p.rasterVariable];
@@ -228,6 +235,16 @@ export function ControlPanel(p: ControlPanelProps) {
         </button>
       </div>
       {min ? <p className="pn-stamp">{timeTag}</p> : null}
+      {min && p.fuel === "ignition" ? (
+        <div className="pn-legend">
+          <div className="ramp" role="img" aria-label={`${p.groundRamp} ramp`} style={{ backgroundImage: rampGradient(rampStops(p.groundRamp)) }} />
+          <div className="pn-legend-ends">
+            <span>{legendEnds[0]}</span>
+            <span className="muted">{legendEnds[2]}</span>
+            <span>{legendEnds[1]}</span>
+          </div>
+        </div>
+      ) : null}
 
       <p>
         Every pixel's <b>AlphaEarth embedding</b> goes through a small head fit on 22,000 real wildfire ignitions (WFIGS, 2019

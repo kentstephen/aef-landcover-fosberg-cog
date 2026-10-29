@@ -51,6 +51,9 @@
 .pn.min .pn-title { margin: 0; }
 .pn.min > :not(.pn-title) { display: none; }
 /* the hour on screen, under the title while the card is collapsed */
+.pn.min > .pn-legend { display: block; width: 220px; margin: 4px 0 2px; }
+.pn.min > .pn-legend .ramp { height: 8px; }
+.pn-legend-ends { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; margin-top: 3px; font-variant-numeric: tabular-nums; }
 .pn.min > .pn-stamp { display: block; margin: 2px 0 2px; font-size: 15px; font-weight: 600; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; }
 
 /* foldable section: header button with a disclosure glyph, body hidden when closed */
