@@ -12,7 +12,7 @@ import { type AefIndex, levelFor } from "./index.js";
 import { E, fromLat, fromLon, TILE, tileBounds, tileRes, toLat, toLon } from "./mercator.js";
 import { type AefArray, MOSAIC_MIN_ZOOM, RES, X0, Y0, YEAR_IDX } from "./mosaic.js";
 import type { AefPool } from "./pool.js";
-import { rampTexture } from "./ramp.js";
+import { rampStops, rampTexture, type GroundRamp } from "./ramp.js";
 import { fuelPipeline, type FuelMode } from "./render.js";
 import { cacheSource, makeGrid, type WeatherGrid, type WeatherSource, weatherTexture } from "./weather.js";
 import { ignLogit, NO_CLASS } from "./head.js";
@@ -59,6 +59,8 @@ export type AefTile = {
 
 export type AefLayerOpts = {
   mode: FuelMode;
+  /** The color ramp the ground is lit with. */
+  ramp: GroundRamp;
   /** The map's zoom, to show one reader at a time. */
   zoom: number;
   teacher: Teacher;
@@ -132,6 +134,7 @@ export class AefLayers {
   readonly work = { reading: 0, done: 0 };
   private device: Device | null = null;
   private ramp: Texture | null = null;
+  private rampId: GroundRamp | null = null;
   private luts: Record<Teacher, Texture> | null = null;
   private opts: AefLayerOpts | null = null;
   private version = 0;
@@ -152,11 +155,13 @@ export class AefLayers {
     this.source = cacheSource(cache, "ignition");
   }
 
-  private textures(device: Device) {
-    if (this.device !== device || !this.ramp || !this.luts) {
+  private textures(device: Device, rampId: GroundRamp) {
+    if (this.device !== device || !this.ramp || !this.luts || this.rampId !== rampId) {
+      if (this.device === device && this.ramp) later(this.ramp);
       this.device = device;
-      this.ramp = rampTexture(device);
-      this.luts = { nlcd: lutTexture(device, "nlcd"), esri: lutTexture(device, "esri") };
+      this.ramp = rampTexture(device, rampStops(rampId));
+      this.rampId = rampId;
+      this.luts = this.device === device && this.luts ? this.luts : { nlcd: lutTexture(device, "nlcd"), esri: lutTexture(device, "esri") };
     }
     return { ramp: this.ramp, luts: this.luts };
   }
@@ -199,7 +204,7 @@ export class AefLayers {
     extentM: number,
     pixelAt: AefTile["pixelAt"],
   ): AefTile {
-    this.textures(device);
+    this.textures(device, this.opts?.ramp ?? "viridis");
     const tex = (plane: Uint8Array) =>
       device.createTexture({
         format: "r8unorm",
@@ -299,7 +304,7 @@ export class AefLayers {
   private renderTile = (d: AefTile) => {
     const o = this.opts;
     if (!o || !this.device || d.gone) return { renderPipeline: [] };
-    const { ramp, luts } = this.textures(this.device);
+    const { ramp, luts } = this.textures(this.device, o.ramp);
     return fuelPipeline({
       classTex: d.classTex[o.teacher],
       groundTex: d.groundTex,
@@ -336,7 +341,7 @@ export class AefLayers {
     }
     // debug hook for the headless probe (this instance is the one deck draws from)
     (globalThis as unknown as { __aef?: unknown }).__aef = { layers: this, cache: this.cache };
-    const key = `${opts.mode}|${opts.teacher}|${opts.leadTimeIdx}|${opts.hideBelow}|${opts.rescaleMax}|${opts.pHide}|${opts.pMax}|${opts.scale}|${opts.zLo}|${opts.zHi}|${opts.useWeather}|${opts.standingAlpha}|${opts.wxGate}|${opts.glowHours}|${opts.grain}`;
+    const key = `${opts.mode}|${opts.ramp}|${opts.teacher}|${opts.leadTimeIdx}|${opts.hideBelow}|${opts.rescaleMax}|${opts.pHide}|${opts.pMax}|${opts.scale}|${opts.zLo}|${opts.zHi}|${opts.useWeather}|${opts.standingAlpha}|${opts.wxGate}|${opts.glowHours}|${opts.grain}`;
     if (key !== this.lastKey) {
       this.lastKey = key;
       this.version++;

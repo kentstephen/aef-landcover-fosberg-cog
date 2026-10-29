@@ -33,6 +33,7 @@ import { openHrrr, type HrrrSource } from "./hrrr/store.js";
 import { FfwiTileCache } from "./hrrr/tile-cache.js";
 import { RASTER_VARIABLES, type RasterVariable } from "./hrrr/variables.js";
 import { HOURS_PER_DAY, WeekWeather, weekHourDate, type WeekSpec } from "./hrrr/week.js";
+import type { GroundRamp } from "./aef/ramp.js";
 import { cacheSource } from "./aef/weather.js";
 import { DeckGlOverlay } from "./lib/deckgl-overlay.js";
 import { ControlPanel, loadingSummary, type ColormapChoiceId, type FuelChoice, type IgnScale, type Status, type TimeMode } from "./ui/ControlPanel.js";
@@ -267,6 +268,7 @@ export default function App() {
   }, []);
   const [teacher, setTeacher] = useState<Teacher>("nlcd");
   const [fuelOpacity, setFuelOpacity] = useState(0.9);
+  const [groundRamp, setGroundRamp] = useState<GroundRamp>("viridis");
   /** Hours of afterglow on the ground (0 = this hour only). */
   const [glowHours, setGlowHours] = useState(24);
   /** Grain cells across a tile (0 = flat fill). */
@@ -494,6 +496,7 @@ export default function App() {
           grain,
           light,
           opacity: fuelOpacity,
+          ramp: groundRamp,
           visible: fuel !== "off",
           beforeId: BEFORE_ID,
         }),
@@ -522,7 +525,7 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     showRaster, source, getTileData, colormapTexture, initTimeIdx, windMode, rasterVariable, selection, renderTile, rasterOpacity,
-    leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity, zoom,
+    leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity, groundRamp, zoom,
     glowHours, grain, light, contourLines, pHide, pMax, ignScale, zLo, zHi, rankRamp, useWeather, standingAlpha, wxGate,
     timeIdx, weatherSrc, weatherKey, timeMode,
   ]);
@@ -666,6 +669,8 @@ export default function App() {
         onTeacherChange={setTeacher}
         fuelOpacity={fuelOpacity}
         onFuelOpacityChange={setFuelOpacity}
+        groundRamp={groundRamp}
+        onGroundRampChange={setGroundRamp}
         glowHours={glowHours}
         onGlowHoursChange={setGlowHours}
         grain={grain}

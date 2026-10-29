@@ -14,6 +14,36 @@ export const VIRIDIS_STOPS = [
   "#9dd93b", "#addc30", "#c0df25", "#d0e11c", "#dfe318", "#efe51c", "#fde725", "#feef54", "#fef784", "#ffffb3",
 ];
 
+/**
+ * Inferno (matplotlib) from 14 percent up, so the ramp starts on a dark violet that still shows against a
+ * dark basemap instead of Inferno's black, with three paler stops above its pale yellow. Fiery: violet,
+ * crimson, orange, yellow; luminance rises the whole way, no green.
+ */
+export const INFERNO_STOPS = [
+  "#260c51", "#2f0a5b", "#380962", "#400a67", "#470b6a", "#4f0d6c", "#57106e", "#5f136e", "#67166e", "#6d186e",
+  "#751b6e", "#7d1e6d", "#85216b", "#8d2369", "#932667", "#9b2964", "#a32c61", "#ab2f5e", "#b1325a", "#b93556",
+  "#c03a51", "#c73e4c", "#ce4347", "#d34743", "#d94d3d", "#df5337", "#e45a31", "#e9612b", "#ec6726", "#f06f20",
+  "#f37819", "#f68013", "#f8870e", "#fa9008", "#fb9906", "#fca309", "#fcac11", "#fcb418", "#fbbe23", "#f9c72f",
+  "#f7d13d", "#f5db4c", "#f3e35a", "#f1ec6d", "#f2f482", "#f6fa96", "#fcffa4", "#fdffb0", "#fdffbc", "#feffc8",
+];
+
+/** Solar (cmocean) from 4 percent up (dark brown-red, orange, yellow) with three paler stops above. */
+export const SOLAR_STOPS = [
+  "#40181d", "#461a1f", "#4c1c20", "#541e22", "#5a2023", "#602124", "#682325", "#6e2525", "#742724", "#7b2a24",
+  "#812c22", "#883021", "#8d331f", "#92361e", "#973b1c", "#9b401a", "#9f4419", "#a44a18", "#a84e16", "#ab5315",
+  "#af5914", "#b25e14", "#b66313", "#b96a13", "#bc6f13", "#bf7413", "#c27b14", "#c48015", "#c78616", "#c98c18",
+  "#cb921a", "#ce981c", "#d09f1e", "#d2a520", "#d4ab23", "#d6b226", "#d7b829", "#d9be2c", "#dac62f", "#dbcc32",
+  "#ddd236", "#deda39", "#dfe13d", "#dfe740", "#e0f044", "#e0f647", "#e1fd4b", "#e7fe6b", "#eefe8b", "#f5ffab",
+];
+
+export type GroundRamp = "viridis" | "inferno" | "solar";
+export const GROUND_RAMPS: { id: GroundRamp; label: string; stops: readonly string[] }[] = [
+  { id: "viridis", label: "Viridis", stops: VIRIDIS_STOPS },
+  { id: "inferno", label: "Inferno", stops: INFERNO_STOPS },
+  { id: "solar", label: "Solar", stops: SOLAR_STOPS },
+];
+export const rampStops = (id: GroundRamp): readonly string[] => GROUND_RAMPS.find((r) => r.id === id)!.stops;
+
 export function hexToRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];

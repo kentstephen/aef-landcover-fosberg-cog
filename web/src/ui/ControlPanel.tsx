@@ -5,7 +5,7 @@ import { useState } from "react";
 import type { Teacher } from "../aef/head.js";
 import { MOSAIC_MIN_ZOOM } from "../aef/mosaic.js";
 import { AEF_YEAR } from "../aef/mosaic.js";
-import { rampGradient } from "../aef/ramp.js";
+import { GROUND_RAMPS, rampGradient, rampStops, type GroundRamp } from "../aef/ramp.js";
 import type { WindMode } from "../ffwi/compute.js";
 import {
   dateFromInitTimeIdx,
@@ -145,6 +145,8 @@ export type ControlPanelProps = {
 
   teacher: Teacher;
   onTeacherChange: (t: Teacher) => void;
+  groundRamp: GroundRamp;
+  onGroundRampChange: (r: GroundRamp) => void;
   fuelOpacity: number;
   onFuelOpacityChange: (v: number) => void;
   glowHours: number;
@@ -266,7 +268,15 @@ export function ControlPanel(p: ControlPanelProps) {
         <p className="muted small">Reading: {reader}{s.aefReading > 0 ? ` · ${s.aefReading} tiles in flight` : ""}</p>
         {p.fuel === "ignition" ? (
           <>
-            <div className="ramp" role="img" aria-label="Viridis ramp" style={{ backgroundImage: rampGradient() }} />
+            <div className="row">
+              <Seg value={p.groundRamp} options={GROUND_RAMPS.map((r) => ({ id: r.id, label: r.label }))} onChange={p.onGroundRampChange} />
+              <Help label="Ramp">
+                Viridis: purple, blue, teal, green, yellow. Inferno: violet, crimson, orange, pale yellow. Solar: brown-red,
+                orange, yellow. All three rise in brightness the whole way, so they read without the hues; none sets red
+                against green. The fiery two start on a dark color that still shows against the dark map.
+              </Help>
+            </div>
+            <div className="ramp" role="img" aria-label={`${p.groundRamp} ramp`} style={{ backgroundImage: rampGradient(rampStops(p.groundRamp)) }} />
             <div className="row">
               <Seg
                 value={p.ignScale}
@@ -351,7 +361,7 @@ export function ControlPanel(p: ControlPanelProps) {
         ) : null}
         {p.fuel === "lit" ? (
           <>
-            <div className="ramp" role="img" aria-label="Viridis ramp" style={{ backgroundImage: rampGradient() }} />
+            <div className="ramp" role="img" aria-label={`${p.groundRamp} ramp`} style={{ backgroundImage: rampGradient(rampStops(p.groundRamp)) }} />
             <p className="muted small">FFWI x fuel weight, {p.hideBelow} (invisible) to {p.rescaleMax} (ramp top){p.tauHours > 0 ? ` · ${p.tauHours} h fuel lag` : ""}</p>
           </>
         ) : null}
