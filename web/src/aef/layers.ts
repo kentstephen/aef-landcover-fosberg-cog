@@ -14,7 +14,7 @@ import { type AefArray, MOSAIC_MIN_ZOOM, RES, X0, Y0, YEAR_IDX } from "./mosaic.
 import type { AefPool } from "./pool.js";
 import { rampTexture } from "./ramp.js";
 import { fuelPipeline, type FuelMode } from "./render.js";
-import { makeGrid, type WeatherGrid, type WeatherKind, weatherTexture } from "./weather.js";
+import { cacheSource, makeGrid, type WeatherGrid, type WeatherSource, weatherTexture } from "./weather.js";
 import { ignLogit, NO_CLASS } from "./head.js";
 
 /**
@@ -22,8 +22,8 @@ import { ignLogit, NO_CLASS } from "./head.js";
  * zoomed out (below MOSAIC_MIN_ZOOM) the AlphaEarth COG overviews through a Web Mercator tile
  * layer whose tiles are resampled in a worker from one byte range per file and level
  * (coarse.worker.ts); zoomed in the 10 m Zarr mosaic. Each tile carries its class planes on the CPU
- * for the tooltip, two class textures on the GPU, and a small weather texture of FFWI for all 49
- * hours, rebuilt from the shared cache when it changes. Drawing is a per-fragment lookup; switching
+ * for the tooltip, two class textures on the GPU, and a small weather texture of the weather for every
+ * layer of the time source (the 49 leads of a run, or the hours of a week), rebuilt when the source changes. Drawing is a per-fragment lookup; switching
  * the mode, the teacher or the hour reads nothing.
  */
 export type AefTile = {
@@ -37,9 +37,10 @@ export type AefTile = {
   /** The ignition ground logit plane. */
   groundTex: Texture;
   grid: WeatherGrid;
-  /** Per node and lead: the FFWI, or in ignition mode the weather part of the ignition logit. */
+  /** Per node and layer: the FFWI, or in ignition mode the weather part of the ignition logit. */
   ffwiTex: Texture;
-  weatherKind: WeatherKind;
+  /** Which source and kind the weather texture was built from. */
+  weatherKey: string;
   /** The weather texture's values on the CPU (lead-major, per node), for the rank scale. */
   weatherNodes: Float32Array;
   /** Every node had weather when the texture was built (nothing to rebuild for a new shard). */
@@ -59,7 +60,11 @@ export type AefLayerOpts = {
   /** The map's zoom, to show one reader at a time. */
   zoom: number;
   teacher: Teacher;
+  /** The layer of the weather texture to draw: the lead hour of a run, or the hour of a week. */
   leadTimeIdx: number;
+  /** Where the weather comes from, and a key that changes when it does (kind, run or week). */
+  weather: WeatherSource;
+  weatherKey: string;
   hideBelow: number;
   rescaleMax: number;
   /** Ignition mode: hidden below this probability, ramp top at pMax (probability scale). */
@@ -118,7 +123,8 @@ export class AefLayers {
   private opts: AefLayerOpts | null = null;
   private version = 0;
   private lastKey = "";
-  private weatherKind: WeatherKind = "ignition";
+  private source: WeatherSource;
+  private weatherKey = "ignition|run";
 
   constructor(
     private pool: AefPool,
@@ -129,7 +135,9 @@ export class AefLayers {
     /** HRRR pixels a new tile needs the forecast for (the side channel fetches the shards). */
     private onNeedWeather: (px: Int16Array, py: Int16Array) => void,
     private redraw: () => void,
-  ) {}
+  ) {
+    this.source = cacheSource(cache, "ignition");
+  }
 
   private textures(device: Device) {
     if (this.device !== device || !this.ramp || !this.luts) {
@@ -141,22 +149,22 @@ export class AefLayers {
   }
 
   /**
-   * The weather changed (a shard arrived, the fuel lag moved, the kind switched): the weather texture anew
-   * for the tiles it concerns. A tile whose nodes all had weather, at this lag and kind, keeps its texture:
+   * The weather changed (a shard arrived, the fuel lag moved, the source switched): the weather texture anew
+   * for the tiles it concerns. A tile whose nodes all had weather, at this lag and source, keeps its texture:
    * a shard arriving elsewhere does not touch it, so the main thread is not held for every tile on every shard.
    */
   refreshWeather() {
     if (!this.device) return;
     let changed = 0;
     for (const t of this.live.values()) {
-      if (t.weatherComplete && t.weatherTau === this.cache.tau && t.weatherKind === this.weatherKind) continue;
+      if (t.weatherComplete && t.weatherTau === this.cache.tau && t.weatherKey === this.weatherKey) continue;
       const old = t.ffwiTex;
-      const w = weatherTexture(this.device, t.grid, this.cache, this.weatherKind);
+      const w = weatherTexture(this.device, t.grid, this.source);
       t.ffwiTex = w.tex;
       t.weatherNodes = w.nodes;
       t.weatherComplete = w.complete;
       t.weatherTau = this.cache.tau;
-      t.weatherKind = this.weatherKind;
+      t.weatherKey = this.weatherKey;
       later(old);
       changed++;
     }
@@ -187,7 +195,7 @@ export class AefLayers {
         sampler: { minFilter: "nearest", magFilter: "nearest", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" },
       });
     const grid = makeGrid(extentM, toLonLat);
-    const w = weatherTexture(device, grid, this.cache, this.weatherKind);
+    const w = weatherTexture(device, grid, this.source);
     const corners = [toLonLat(0, 0), toLonLat(1, 0), toLonLat(0, 1), toLonLat(1, 1)];
     const bbox: AefTile["bbox"] = [
       Math.min(...corners.map((c) => c[0])), Math.min(...corners.map((c) => c[1])),
@@ -195,13 +203,13 @@ export class AefLayers {
     ];
     const t: AefTile = {
       key, kind, width, height,
-      byteLength: 4 * width * height + 2 * 49 * grid.cols * grid.rows,
+      byteLength: 4 * width * height + 2 * this.source.depth * grid.cols * grid.rows,
       classes,
       classTex: { nlcd: tex(classes.nlcd), esri: tex(classes.esri) },
       groundTex: tex(classes.ign),
       grid,
       ffwiTex: w.tex,
-      weatherKind: this.weatherKind,
+      weatherKey: this.weatherKey,
       weatherNodes: w.nodes,
       weatherComplete: w.complete,
       weatherTau: this.cache.tau,
@@ -306,9 +314,9 @@ export class AefLayers {
 
   layers(opts: AefLayerOpts): Layer[] {
     this.opts = opts;
-    const kind: WeatherKind = opts.mode === "ignition" ? "ignition" : "ffwi";
-    if (kind !== this.weatherKind) {
-      this.weatherKind = kind;
+    if (opts.weatherKey !== this.weatherKey || opts.weather !== this.source) {
+      this.weatherKey = opts.weatherKey;
+      this.source = opts.weather;
       this.refreshWeather();
     }
     // debug hook for the headless probe (this instance is the one deck draws from)

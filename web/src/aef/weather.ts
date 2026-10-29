@@ -4,12 +4,31 @@ import { HRRR_LEAD_TIME_COUNT, lonLatToHrrrPixelF } from "../hrrr/metadata.js";
 import type { FfwiTileCache } from "../hrrr/tile-cache.js";
 
 /**
+ * Where a weather texture's values come from: `depth` layers (the 49 leads of a run, or the hours of
+ * a week) at every HRRR pixel, NaN where not in hand.
+ */
+export type WeatherSource = {
+  depth: number;
+  inGrid(x: number, y: number): boolean;
+  series(x: number, y: number, out: Float32Array): void;
+};
+
+/** The run cache as a source: the FFWI, or the weather part of the ignition logit, per lead. */
+export function cacheSource(cache: FfwiTileCache, kind: WeatherKind): WeatherSource {
+  return {
+    depth: HRRR_LEAD_TIME_COUNT,
+    inGrid: (x, y) => cache.inGrid(x, y),
+    series: kind === "ignition" ? (x, y, out) => cache.ignitionSeries(x, y, out) : (x, y, out) => cache.ffwiSeries(x, y, out),
+  };
+}
+
+/**
  * The hour's weather on a land cover tile: a grid of nodes over the tile (about one per 800 m, at
  * least 4 x 4), each the FFWI at its spot for all 49 lead hours, read from the shared cache as a
  * bilinear blend of the four HRRR pixels around it (the pixel is 3 km; blending, rather than taking
  * the nearest pixel, keeps the field continuous across tile edges and inside a tile). Uploaded as one
- * r16float texture array the shader samples at the fragment's uv; rebuilt when the cache changes
- * (a shard arrives, the fuel lag changes); the lead hour is a uniform.
+ * r16float texture array the shader samples at the fragment's uv; rebuilt when the source changes
+ * (a shard arrives, the fuel lag changes, a week replaces the run); the layer (hour) is a uniform.
  */
 export type WeatherGrid = {
   cols: number;
@@ -54,20 +73,21 @@ export type WeatherTex = {
   nodes: Float32Array;
 };
 
-export function weatherTexture(device: Device, g: WeatherGrid, cache: FfwiTileCache, kind: WeatherKind = "ffwi"): WeatherTex {
+export function weatherTexture(device: Device, g: WeatherGrid, src: WeatherSource): WeatherTex {
   const per = g.cols * g.rows;
+  const depth = src.depth;
   let complete = true;
-  const nodes = new Float32Array(HRRR_LEAD_TIME_COUNT * per).fill(NaN);
-  const data = new Uint16Array(HRRR_LEAD_TIME_COUNT * per);
+  const nodes = new Float32Array(depth * per).fill(NaN);
+  const data = new Uint16Array(depth * per);
   const nan = toHalf(NaN);
-  const acc = new Float32Array(HRRR_LEAD_TIME_COUNT);
-  const wsum = new Float32Array(HRRR_LEAD_TIME_COUNT);
-  const s = new Float32Array(HRRR_LEAD_TIME_COUNT);
+  const acc = new Float32Array(depth);
+  const wsum = new Float32Array(depth);
+  const s = new Float32Array(depth);
   for (let k = 0; k < per; k++) {
     const x = g.fx[k]!;
     const y = g.fy[k]!;
     if (!Number.isFinite(x)) {
-      for (let l = 0; l < HRRR_LEAD_TIME_COUNT; l++) data[l * per + k] = nan;
+      for (let l = 0; l < depth; l++) data[l * per + k] = nan;
       continue;
     }
     // the four pixel centers around the node, weighted by distance; a missing pixel drops out
@@ -85,10 +105,9 @@ export function weatherTexture(device: Device, g: WeatherGrid, cache: FfwiTileCa
         if (w <= 0) continue;
         const xx = x0 + dx;
         const yy = y0 + dy;
-        if (!cache.inGrid(xx, yy)) continue;
-        if (kind === "ignition") cache.ignitionSeries(xx, yy, s);
-        else cache.ffwiSeries(xx, yy, s);
-        for (let l = 0; l < HRRR_LEAD_TIME_COUNT; l++) {
+        if (!src.inGrid(xx, yy)) continue;
+        src.series(xx, yy, s);
+        for (let l = 0; l < depth; l++) {
           const v = s[l]!;
           if (v === v) {
             acc[l] = acc[l]! + w * v;
@@ -97,7 +116,7 @@ export function weatherTexture(device: Device, g: WeatherGrid, cache: FfwiTileCa
         }
       }
     }
-    for (let l = 0; l < HRRR_LEAD_TIME_COUNT; l++) {
+    for (let l = 0; l < depth; l++) {
       if (wsum[l]! > 0) {
         const v = acc[l]! / wsum[l]!;
         data[l * per + k] = toHalf(v);
@@ -113,7 +132,7 @@ export function weatherTexture(device: Device, g: WeatherGrid, cache: FfwiTileCa
     format: "r16float",
     width: g.cols,
     height: g.rows,
-    depth: HRRR_LEAD_TIME_COUNT,
+    depth,
     mipLevels: 1,
     data,
     sampler: { minFilter: "linear", magFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" },

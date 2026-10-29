@@ -32,6 +32,13 @@ weights; static site.
 Order of work: Python first (the model, checked by looking at its land cover
 maps), then the TypeScript map.
 
+## Status (2026-10-28, week mode)
+
+- The map plays a WEEK by default: one 12Z HRRR run per day, its first 24 hours, stitched hour by hour
+  (`web/src/hrrr/week.ts`), opening on Los Angeles for January 5 to 11, 2025. The 48 h single run is the
+  other time mode. Season playback is not built (the analysis store is time-chunked; see HANDOFF.md).
+- Panel: Ignition / Off; the weather field fold, the land cover modes and grain are commented out.
+
 ## Status (2026-10-28, map built, reader rebuilt)
 
 - `web/src/aef/` draws the ground lit by the hour's FFWI. Two readers, one head, one shader:

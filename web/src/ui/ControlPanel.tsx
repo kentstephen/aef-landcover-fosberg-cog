@@ -1,5 +1,6 @@
-import { COLORMAP_INDEX } from "@developmentseed/deck.gl-raster/gpu-modules";
-import colormapsPngUrl from "@developmentseed/deck.gl-raster/gpu-modules/colormaps.png";
+// the HRRR field fold (the 3 km weather drawn itself) is commented out below; its imports with it
+// import { COLORMAP_INDEX } from "@developmentseed/deck.gl-raster/gpu-modules";
+// import colormapsPngUrl from "@developmentseed/deck.gl-raster/gpu-modules/colormaps.png";
 import { useState } from "react";
 import type { Teacher } from "../aef/head.js";
 import { MOSAIC_MIN_ZOOM } from "../aef/mosaic.js";
@@ -14,11 +15,14 @@ import {
   initTimeIdxFromDate,
   isoDateString,
 } from "../hrrr/metadata.js";
-import { RASTER_VARIABLES, windLabel, type RasterVariable } from "../hrrr/variables.js";
-import { A, Check, Field, Fold, Help, Ramp, Seg, Slider } from "./controls.js";
+import { type RasterVariable } from "../hrrr/variables.js";
+// import { RASTER_VARIABLES, windLabel } from "../hrrr/variables.js";
+import { HOURS_PER_DAY } from "../hrrr/week.js";
+import { A, Check, Field, Fold, Help, Seg, Slider } from "./controls.js";
+// import { Ramp } from "./controls.js";
 import "./panel.css";
 
-const COLORMAP_ROW_COUNT = Object.keys(COLORMAP_INDEX).length;
+// const COLORMAP_ROW_COUNT = Object.keys(COLORMAP_INDEX).length;
 
 /** Protan-safe, luminance-monotone ramps with a bright hot end (the HRRR field). */
 export const COLORMAP_CHOICES = [
@@ -38,6 +42,8 @@ export type ColormapChoiceId = (typeof COLORMAP_CHOICES)[number]["id"];
 export type FuelChoice = "ignition" | "lit" | "cover" | "off";
 /** How the ignition head meets the ramp. */
 export type IgnScale = "probability" | "logit" | "rank";
+/** The time axis: one 48 h forecast run, or a week of daily 12Z runs stitched hour by hour. */
+export type TimeMode = "run" | "week" | "season";
 
 export type Status = {
   backend: "icechunk" | "zarr-v3" | null;
@@ -46,6 +52,9 @@ export type Status = {
   aefIndexReady: boolean;
   aefReading: number;
   aefDone: number;
+  /** Week mode: shard-days in hand and asked for. */
+  weekDone: number;
+  weekWanted: number;
   error: string | null;
 };
 
@@ -70,6 +79,11 @@ export function loadingSummary(s: Status): { fraction: number; label: string } |
     done += s.aefDone;
     parts.push(`land cover ${s.aefDone} / ${s.aefReading + s.aefDone}`);
   }
+  if (s.weekWanted > s.weekDone) {
+    total += s.weekWanted;
+    done += s.weekDone;
+    parts.push(`weather ${s.weekDone} / ${s.weekWanted} shards`);
+  }
   if (parts.length === 0) return null;
   return { fraction: total > 0 ? done / total : 0, label: `Loading ${parts.join(" · ")}` };
 }
@@ -84,6 +98,24 @@ export type ControlPanelProps = {
   onLeadTimeIdxChange: (idx: number) => void;
   onPlayPauseToggle: () => void;
   onFrameDurationMsChange: (ms: number) => void;
+  timeMode: TimeMode;
+  onTimeModeChange: (m: TimeMode) => void;
+  /** Week mode: the UTC date of day 0, the number of days, the hour on screen (0 .. days x 24 - 1). */
+  weekStart: Date;
+  onWeekStartChange: (d: Date) => void;
+  weekDays: number;
+  onWeekDaysChange: (n: number) => void;
+  hourIdx: number;
+  onHourIdxChange: (h: number) => void;
+  weekDepth: number;
+  weekHourLabel: string;
+  /** The season on the site: its year, days (0 = not loaded), the day on screen and its date. */
+  seasonYear: number;
+  seasonDays: number;
+  seasonMissing: boolean;
+  dayIdx: number;
+  onDayIdxChange: (d: number) => void;
+  seasonDayLabel: string;
 
   fuel: FuelChoice;
   onFuelChange: (f: FuelChoice) => void;
@@ -149,10 +181,10 @@ export type ControlPanelProps = {
   status: Status;
 };
 
-const FIELD_OPTIONS = [
-  { id: "nothing", label: "nothing" },
-  ...Object.values(RASTER_VARIABLES).map((v) => ({ id: v.id as string, label: v.id === "ffwi" ? "FFWI" : v.label.toLowerCase() })),
-];
+// const FIELD_OPTIONS = [
+//   { id: "nothing", label: "nothing" },
+//   ...Object.values(RASTER_VARIABLES).map((v) => ({ id: v.id as string, label: v.id === "ffwi" ? "FFWI" : v.label.toLowerCase() })),
+// ];
 
 export function ControlPanel(p: ControlPanelProps) {
   const hours = HRRR_LEAD_TIME_HOURS[p.leadTimeIdx] ?? 0;
@@ -161,23 +193,26 @@ export function ControlPanel(p: ControlPanelProps) {
   const validStr = `${isoDateString(validUTC)} ${String(validUTC.getUTCHours()).padStart(2, "0")}:00Z`;
   const s = p.status;
   const loading = loadingSummary(s);
-  const rv = RASTER_VARIABLES[p.rasterVariable];
   const [min, setMin] = useState(false);
   const reader = p.zoom >= MOSAIC_MIN_ZOOM ? "10 m mosaic" : "COG overviews";
-
-  const field = p.showRaster ? p.rasterVariable : "nothing";
-  const fieldOptions = FIELD_OPTIONS.map((o) => (o.id === "wind" ? { ...o, label: windLabel(p.windMode).replace(/^wind: /, "wind ") } : o));
-  const setField = (id: string) => {
-    if (id === "nothing") p.onShowRasterChange(false);
-    else {
-      p.onShowRasterChange(true);
-      p.onRasterVariableChange(id as RasterVariable);
-    }
-  };
-  const fieldRampLabel =
-    p.rasterVariable === "ffwi"
-      ? `FFWI${p.tauHours > 0 ? ` (${p.tauHours} h fuel lag)` : ""} ${p.hideBelow} to ${p.rescaleMax}`
-      : `${rv.format(rv.min)} to ${rv.format(rv.max)}${rv.reversed ? " (reversed: dry is bright)" : ""}`;
+  const weekEnd = new Date(p.weekStart.getTime());
+  weekEnd.setUTCDate(weekEnd.getUTCDate() + p.weekDays - 1);
+  const timeTag = p.timeMode === "season" ? p.seasonDayLabel : p.timeMode === "week" ? p.weekHourLabel : `+${hours} h · ${validStr}`;
+  // the HRRR field fold is commented out below
+  // const rv = RASTER_VARIABLES[p.rasterVariable];
+  // const field = p.showRaster ? p.rasterVariable : "nothing";
+  // const fieldOptions = FIELD_OPTIONS.map((o) => (o.id === "wind" ? { ...o, label: windLabel(p.windMode).replace(/^wind: /, "wind ") } : o));
+  // const setField = (id: string) => {
+  //   if (id === "nothing") p.onShowRasterChange(false);
+  //   else {
+  //     p.onShowRasterChange(true);
+  //     p.onRasterVariableChange(id as RasterVariable);
+  //   }
+  // };
+  // const fieldRampLabel =
+  //   p.rasterVariable === "ffwi"
+  //     ? `FFWI${p.tauHours > 0 ? ` (${p.tauHours} h fuel lag)` : ""} ${p.hideBelow} to ${p.rescaleMax}`
+  //     : `${rv.format(rv.min)} to ${rv.format(rv.max)}${rv.reversed ? " (reversed: dry is bright)" : ""}`;
 
   return (
     <div className={`pn${min ? " min" : ""}`}>
@@ -191,8 +226,9 @@ export function ControlPanel(p: ControlPanelProps) {
       <p>
         Every pixel's <b>AlphaEarth embedding</b> goes through a small head fit on 22,000 real wildfire ignitions (WFIGS, 2019
         to 2026) against points 20 to 30 km away at other hours, together with the hour's weather from NOAA's HRRR
-        forecast (Fosberg index, temperature, humidity, wind). The map shows the head's ignition probability hour by hour:
-        invisible where it is low, viridis as it climbs.
+        forecast (Fosberg index, temperature, humidity, wind). The map plays the head's ignition probability day by day
+        over the {p.seasonYear} season, hour by hour over a week of daily forecasts, or over one 48 h run: the ground in
+        gray all the time, in color where the weather lifts it.
       </p>
       <p className="muted small" style={{ marginTop: 6 }}>
         Data: <A href="https://source.coop/tge-labs/aef">AlphaEarth Foundations {AEF_YEAR}</A> (tge-labs on Source Cooperative) ·{" "}
@@ -214,8 +250,8 @@ export function ControlPanel(p: ControlPanelProps) {
             value={p.fuel}
             options={[
               { id: "ignition", label: "Ignition" },
-              { id: "lit", label: "Lit by FFWI" },
-              // the land cover as classes is not shown; the picture is the ground lit by the weather
+              // the land cover lit by FFWI x fuel weight, and the classes themselves: not shown; the picture is the ignition head
+              // { id: "lit", label: "Lit by FFWI" },
               // { id: "cover", label: "Land cover" },
               { id: "off", label: "Off" },
             ]}
@@ -308,20 +344,26 @@ export function ControlPanel(p: ControlPanelProps) {
             </div>
             {/* burn perimeters: not drawn for now (TODO GeoArrow); see App.tsx */}
           </>
-        ) : (
+        ) : null}
+        {/* the land cover modes (teacher, lit ramp), with the modes above
+        {p.fuel !== "ignition" ? (
           <div className="row">
             <Seg value={p.teacher} options={[{ id: "nlcd", label: "NLCD (16 classes)" }, { id: "esri", label: "Esri (9 classes)" }]} onChange={p.onTeacherChange} />
           </div>
-        )}
+        ) : null}
         {p.fuel === "lit" ? (
           <>
             <div className="ramp" role="img" aria-label="Viridis ramp" style={{ backgroundImage: rampGradient() }} />
             <p className="muted small">FFWI x fuel weight, {p.hideBelow} (invisible) to {p.rescaleMax} (ramp top){p.tauHours > 0 ? ` · ${p.tauHours} h fuel lag` : ""}</p>
           </>
         ) : null}
+        */}
         <Field label={`Opacity ${Math.round(p.fuelOpacity * 100)}%`}>
           <Slider min={0.05} max={1} step={0.05} value={p.fuelOpacity} onChange={p.onFuelOpacityChange} label="Ground opacity" onReset={() => p.onFuelOpacityChange(0.9)} />
         </Field>
+        {p.timeMode === "season" ? (
+          <p className="muted small">Afterglow: off over the season (each day stands alone).</p>
+        ) : (
         <Field
           label={
             <span className="row">
@@ -336,9 +378,12 @@ export function ControlPanel(p: ControlPanelProps) {
         >
           <Slider min={0} max={48} step={1} value={p.glowHours} onChange={p.onGlowHoursChange} label="Afterglow hours" onReset={() => p.onGlowHoursChange(24)} />
         </Field>
+        )}
+        {/* grain (the fill broken into cells): off, not offered
         <Field label={p.grain === 0 ? "Grain: off (flat fill)" : `Grain: ${p.grain} cells across a tile`}>
           <Slider min={0} max={128} step={8} value={p.grain} onChange={p.onGrainChange} label="Grain" onReset={() => p.onGrainChange(0)} />
         </Field>
+        */}
         <div className="row">
           <Check checked={p.light} onChange={p.onLightChange} label="Draw as light (adds up over the map)" />
           {/* <Check checked={p.relief} onChange={p.onReliefChange} label="Relief under the ground" /> */}
@@ -357,7 +402,76 @@ export function ControlPanel(p: ControlPanelProps) {
         */}
       </Fold>
 
-      <Fold k="time" label="Forecast hour" defaultOpen tag={`+${hours} h · ${validStr}`}>
+      <Fold k="time" label="Time" defaultOpen tag={timeTag}>
+        <div className="row">
+          <Seg
+            value={p.timeMode}
+            options={[
+              { id: "season", label: `The ${p.seasonYear} season` },
+              { id: "week", label: "A week" },
+              { id: "run", label: "One 48 h run" },
+            ]}
+            onChange={p.onTimeModeChange}
+          />
+          <Help label="Time">
+            The season: one frame per day, February to the end of October, each pixel at its day's worst hour (06Z to 06Z)
+            of the weather term, from the HRRR analysis (what happened, not a forecast), precomputed once (about 4 MB per
+            800 km shard for the whole season, fetched as the view asks). A week: one 12Z HRRR run per day, its first 24
+            hours each, stitched into one hourly film (about 18 MB per shard per day; a week over the country is about 3 GB
+            cold, kept on disk after). One run: the 49 hours of a single forecast.
+          </Help>
+        </div>
+        {p.timeMode === "season" ? (
+          <>
+            {p.seasonMissing ? (
+              <p className="warn small">The season is not on the site (run ignition/fetch_season.py, then --assemble).</p>
+            ) : p.seasonDays === 0 ? (
+              <p className="muted small">Opening the season...</p>
+            ) : (
+              <>
+                <Field label={<span>Day {p.dayIdx + 1} of {p.seasonDays} · {p.seasonDayLabel} (the day's worst hour, 06Z to 06Z)</span>}>
+                  <div className="row" style={{ flexWrap: "nowrap" }}>
+                    <button type="button" className="play" aria-label={p.isPlaying ? "Pause" : "Play"} onClick={(e) => { p.onPlayPauseToggle(); e.currentTarget.blur(); }}>
+                      {p.isPlaying ? "❚❚" : "▶"}
+                    </button>
+                    <Slider min={0} max={p.seasonDays - 1} step={1} value={p.dayIdx} onChange={p.onDayIdxChange} label="Season day" onReset={() => p.onDayIdxChange(0)} />
+                  </div>
+                </Field>
+                <Field label={`Seconds per day: ${(p.frameDurationMs / 1000).toFixed(2)} (the season in ${Math.round((p.frameDurationMs * p.seasonDays) / 1000)} s)`}>
+                  <Slider min={40} max={1000} step={20} value={p.frameDurationMs} onChange={p.onFrameDurationMsChange} label="Frame duration" onReset={() => p.onFrameDurationMsChange(100)} />
+                </Field>
+              </>
+            )}
+          </>
+        ) : p.timeMode === "week" ? (
+          <>
+            <Field label={`Days (UTC): ${isoDateString(p.weekStart)} to ${isoDateString(weekEnd)}, ${p.weekDays} day${p.weekDays === 1 ? "" : "s"}`}>
+              <div className="row">
+                <input
+                  type="date"
+                  min={isoDateString(INIT_TIME_ORIGIN)}
+                  max={p.initTimeCount > 0 ? isoDateString(dateFromInitTimeIdx(p.initTimeCount - 1)) : undefined}
+                  value={isoDateString(p.weekStart)}
+                  disabled={p.initTimeCount === 0}
+                  onChange={(e) => { if (e.target.value) p.onWeekStartChange(new Date(`${e.target.value}T00:00:00Z`)); }}
+                />
+                <Slider min={1} max={14} step={1} value={p.weekDays} onChange={p.onWeekDaysChange} label="Days" onReset={() => p.onWeekDaysChange(7)} />
+              </div>
+            </Field>
+            <Field label={<span>Day {Math.floor(p.hourIdx / HOURS_PER_DAY) + 1} · {p.weekHourLabel} (+{p.hourIdx % HOURS_PER_DAY} h into that day's run)</span>}>
+              <div className="row" style={{ flexWrap: "nowrap" }}>
+                <button type="button" className="play" aria-label={p.isPlaying ? "Pause" : "Play"} onClick={(e) => { p.onPlayPauseToggle(); e.currentTarget.blur(); }}>
+                  {p.isPlaying ? "❚❚" : "▶"}
+                </button>
+                <Slider min={0} max={Math.max(0, p.weekDepth - 1)} step={1} value={p.hourIdx} onChange={p.onHourIdxChange} label="Week hour" onReset={() => p.onHourIdxChange(0)} />
+              </div>
+            </Field>
+            <Field label={`Seconds per hour: ${(p.frameDurationMs / 1000).toFixed(2)} (the week in ${Math.round((p.frameDurationMs * p.weekDepth) / 1000)} s)`}>
+              <Slider min={40} max={1000} step={20} value={p.frameDurationMs} onChange={p.onFrameDurationMsChange} label="Frame duration" onReset={() => p.onFrameDurationMsChange(100)} />
+            </Field>
+          </>
+        ) : (
+          <>
         <Field label="Forecast run (UTC)">
           <div className="row">
             <input
@@ -391,10 +505,14 @@ export function ControlPanel(p: ControlPanelProps) {
           </div>
         </Field>
         <Field label={`Seconds per forecast hour: ${(p.frameDurationMs / 1000).toFixed(2)}`}>
-          <Slider min={80} max={1000} step={20} value={p.frameDurationMs} onChange={p.onFrameDurationMsChange} label="Frame duration" onReset={() => p.onFrameDurationMsChange(300)} />
+          <Slider min={80} max={1000} step={20} value={p.frameDurationMs} onChange={p.onFrameDurationMsChange} label="Frame duration" onReset={() => p.onFrameDurationMsChange(100)} />
         </Field>
+          </>
+        )}
       </Fold>
 
+      {/* the 3 km weather field drawn itself (FFWI contours, the field, its ramp, the hide line, the fuel lag, the wind
+          mode): not shown for now; the picture is the ground. The state behind it is still in App.tsx.
       <Fold k="field" label="The weather" defaultOpen tag={fieldOptions.find((o) => o.id === field)?.label}>
         <Field label={p.contourStep === 0 ? "Contours: off" : `Contours of the FFWI field every ${p.contourStep}, from the hide line up`}>
           <Slider min={0} max={50} step={5} value={p.contourStep} onChange={p.onContourStepChange} label="Contour step" onReset={() => p.onContourStepChange(0)} />
@@ -452,8 +570,11 @@ export function ControlPanel(p: ControlPanelProps) {
         </select>
         <Check checked={p.showRaster} onChange={p.onShowRasterChange} label="Show the field" />
       </Fold>
+      */}
 
       {s.error ? <p className="warn small" style={{ marginTop: 8 }}>{s.error}</p> : null}
+
+      <p className="muted small" style={{ marginTop: 8 }}>Keys: Space plays and pauses, F is full screen.</p>
 
       <div className="pn-foot">
         <span>Built with <A href="https://github.com/developmentseed/deck.gl-raster">deck.gl-raster</A> by <A href="https://developmentseed.org">Development Seed</A></span>

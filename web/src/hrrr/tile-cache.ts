@@ -119,6 +119,19 @@ export class FfwiTileCache {
     lagMoisture(t.mEq, HRRR_LEAD_TIME_COUNT, perLead, this.tau, t.mLag);
   }
 
+  /** The shards in hand. */
+  entries(): IterableIterator<FfwiTile> {
+    return this.tiles.values();
+  }
+
+  /** Drop one shard (its data has been taken elsewhere). */
+  delete(key: string): void {
+    const old = this.tiles.get(key);
+    if (!old) return;
+    this.tiles.delete(key);
+    this.byIdx[FfwiTileCache.idxOf(old)] = undefined;
+  }
+
   clear(): void {
     this.tiles.clear();
     this.byIdx = new Array(MAX_TILES);

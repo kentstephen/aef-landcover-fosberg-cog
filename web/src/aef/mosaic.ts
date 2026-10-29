@@ -14,7 +14,7 @@ export const fromS3 = (url: string) =>
 export const VARIABLE = "embeddings";
 export const YEARS = [2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025];
 /** The embedding year the map reads: the year before the fires it is judged on (2025 perimeters). */
-export const AEF_YEAR = 2024;
+export const AEF_YEAR = 2025;
 export const YEAR_IDX = YEARS.indexOf(AEF_YEAR);
 /** Below this the mosaic would read too much (every zoom step out is four times the chunks). */
 export const MOSAIC_MIN_ZOOM = 12;
