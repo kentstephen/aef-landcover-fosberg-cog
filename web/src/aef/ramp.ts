@@ -45,10 +45,20 @@ export const FIRE_STOPS = [
   "#ffc905", "#ffd107", "#ffd909", "#ffdf0b", "#ffe70f", "#ffef17", "#fff52b", "#fffb62", "#fffebb", "#ffffff",
 ];
 
-export type GroundRamp = "viridis" | "inferno" | "solar" | "fire";
+/** Magma (matplotlib) from 14 percent up, three paler stops above: violet, magenta, salmon, pale cream. Softer than Inferno. */
+export const MAGMA_STOPS = [
+  "#21114e", "#29115a", "#311165", "#390f6e", "#400f74", "#491078", "#51127c", "#59157e", "#601880", "#671b80",
+  "#6e1e81", "#762181", "#7e2482", "#862781", "#8c2981", "#942c80", "#9c2e7f", "#a5317e", "#ab337c", "#b3367a",
+  "#bc3978", "#c43c75", "#cc3f71", "#d2426f", "#d9466b", "#e04c67", "#e75263", "#ec5860", "#f05f5e", "#f4675c",
+  "#f7705c", "#f9795d", "#fa815f", "#fc8a62", "#fd9467", "#fe9d6c", "#fea772", "#feae77", "#feb77e", "#fec185",
+  "#feca8d", "#fed395", "#fdda9c", "#fde3a5", "#fcecae", "#fcf6b8", "#fcfdbf", "#fcfdc8", "#fdfed0", "#fefed9",
+];
+
+export type GroundRamp = "viridis" | "inferno" | "magma" | "solar" | "fire";
 export const GROUND_RAMPS: { id: GroundRamp; label: string; stops: readonly string[] }[] = [
   { id: "viridis", label: "Viridis", stops: VIRIDIS_STOPS },
   { id: "inferno", label: "Inferno", stops: INFERNO_STOPS },
+  { id: "magma", label: "Magma", stops: MAGMA_STOPS },
   { id: "solar", label: "Solar", stops: SOLAR_STOPS },
   { id: "fire", label: "Fire", stops: FIRE_STOPS },
 ];

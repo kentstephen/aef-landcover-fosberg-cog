@@ -275,8 +275,8 @@ export function ControlPanel(p: ControlPanelProps) {
             <div className="row">
               <Seg value={p.groundRamp} options={GROUND_RAMPS.map((r) => ({ id: r.id, label: r.label }))} onChange={p.onGroundRampChange} />
               <Help label="Ramp">
-                Viridis: purple, blue, teal, green, yellow. Inferno: violet, crimson, orange, pale yellow. Solar: brown-red,
-                orange, yellow. Fire (colorcet): deep red, orange, yellow, white. All four rise in brightness the whole way, so they read without the hues; none sets red
+                Viridis: purple, blue, teal, green, yellow. Inferno: violet, crimson, orange, pale yellow. Magma: violet, magenta, salmon, cream. Solar: brown-red,
+                orange, yellow. Fire (colorcet): deep red, orange, yellow, white. All five rise in brightness the whole way, so they read without the hues; none sets red
                 against green. The fiery two start on a dark color that still shows against the dark map.
               </Help>
             </div>
