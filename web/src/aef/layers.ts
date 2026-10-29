@@ -14,6 +14,7 @@ import { type AefArray, MOSAIC_MIN_ZOOM, RES, X0, Y0, YEAR_IDX } from "./mosaic.
 import type { AefPool } from "./pool.js";
 import { rampStops, rampTexture, type GroundRamp } from "./ramp.js";
 import { fuelPipeline, type FuelMode } from "./render.js";
+import { forgetData } from "../hrrr/get-tile-data.js";
 import { cacheSource, makeGrid, type WeatherGrid, type WeatherSource, weatherTexture } from "./weather.js";
 import { ignLogit, NO_CLASS } from "./head.js";
 
@@ -43,8 +44,6 @@ export type AefTile = {
   ffwiTex: Texture;
   /** Which source and kind the weather texture was built from. */
   weatherKey: string;
-  /** The weather texture's values on the CPU (lead-major, per node), for the rank scale. */
-  weatherNodes: Float32Array;
   /** Every node had weather when the texture was built (nothing to rebuild for a new shard). */
   weatherComplete: boolean;
   /** The fuel lag the texture was built with. */
@@ -183,7 +182,6 @@ export class AefLayers {
       const old = t.ffwiTex;
       const w = weatherTexture(this.device, t.grid, this.source);
       t.ffwiTex = w.tex;
-      t.weatherNodes = w.nodes;
       t.weatherComplete = w.complete;
       t.weatherTau = this.cache.tau;
       t.weatherKey = this.weatherKey;
@@ -208,14 +206,14 @@ export class AefLayers {
   ): AefTile {
     this.textures(device, this.opts?.ramp ?? "viridis");
     const tex = (plane: Uint8Array) =>
-      device.createTexture({
+      forgetData(device.createTexture({
         format: "r8unorm",
         width,
         height,
         mipLevels: 1,
         data: plane,
         sampler: { minFilter: "nearest", magFilter: "nearest", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" },
-      });
+      }));
     const grid = makeGrid(extentM, toLonLat);
     const w = weatherTexture(device, grid, this.source);
     const corners = [toLonLat(0, 0), toLonLat(1, 0), toLonLat(0, 1), toLonLat(1, 1)];
@@ -232,7 +230,6 @@ export class AefLayers {
       grid,
       ffwiTex: w.tex,
       weatherKey: this.weatherKey,
-      weatherNodes: w.nodes,
       weatherComplete: w.complete,
       weatherTau: this.cache.tau,
       bbox,
@@ -387,19 +384,26 @@ export class AefLayers {
 
   /**
    * The ignition logit at given quantiles over the pixels of the tiles on hand inside a lon/lat view, at one
-   * lead (every 4th pixel each way, the weather at the pixel's nearest node; the afterglow left out). For
-   * the rank scale: the ramp set so the view's brightest fraction is the ramp top, whatever the weather.
+   * lead (every 4th pixel each way, the weather read from the source at the HRRR pixel under the pixel's
+   * nearest node; the afterglow left out). For the rank scale: the ramp set so the view's brightest fraction
+   * is the ramp top, whatever the weather.
    */
   quantiles(view: [number, number, number, number], lead: number, qs: number[], useWeather: boolean, kind: AefTile["kind"]): number[] | null {
     const vals: number[] = [];
     const [vw, vs, ve, vn] = view;
+    const src = this.source;
+    const series = new Float32Array(src.depth);
+    const wxAt = src.at
+      ? (x: number, y: number) => src.at!(x, y, lead)
+      : (x: number, y: number) => {
+          src.series(x, y, series);
+          return series[lead]!;
+        };
     for (const t of this.live.values()) {
       if (t.kind !== kind) continue;
       const [w, s, e, n] = t.bbox;
       if (e < vw || w > ve || n < vs || s > vn) continue;
-      const { cols, rows } = t.grid;
-      const per = cols * rows;
-      const off = lead * per;
+      const { cols, rows, px, py } = t.grid;
       for (let y = 2; y < t.height; y += 4) {
         const ny = Math.min(rows - 1, Math.floor((y / t.height) * rows));
         for (let x = 2; x < t.width; x += 4) {
@@ -408,7 +412,10 @@ export class AefLayers {
           let z = ignLogit(t.classes.ign[i]!);
           if (useWeather) {
             const nx = Math.min(cols - 1, Math.floor((x / t.width) * cols));
-            const wv = t.weatherNodes[off + ny * cols + nx]!;
+            const k = ny * cols + nx;
+            const hx = px[k]!;
+            if (hx < 0) continue;
+            const wv = wxAt(hx, py[k]!);
             if (!Number.isFinite(wv)) continue;
             z += wv;
           }

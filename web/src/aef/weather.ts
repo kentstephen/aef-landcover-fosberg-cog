@@ -1,5 +1,5 @@
 import type { Device, Texture } from "@luma.gl/core";
-import { toHalf } from "../hrrr/get-tile-data.js";
+import { forgetData, toHalf } from "../hrrr/get-tile-data.js";
 import { HRRR_LEAD_TIME_COUNT, lonLatToHrrrPixelF } from "../hrrr/metadata.js";
 import type { FfwiTileCache } from "../hrrr/tile-cache.js";
 
@@ -23,7 +23,7 @@ export function cacheSource(cache: FfwiTileCache, kind: WeatherKind): WeatherSou
     depth: HRRR_LEAD_TIME_COUNT,
     inGrid: (x, y) => cache.inGrid(x, y),
     series: kind === "ignition" ? (x, y, out) => cache.ignitionSeries(x, y, out) : (x, y, out) => cache.ffwiSeries(x, y, out),
-    at: kind === "ignition" ? (x, y, l) => cache.ignitionAt(x, y, l) : undefined,
+    at: kind === "ignition" ? (x, y, l) => cache.ignitionAt(x, y, l) : (x, y, l) => cache.ffwiAt(x, y, l),
   };
 }
 
@@ -76,9 +76,8 @@ export type WeatherTex = {
   tex: Texture;
   /** Every node on the grid had weather for every lead. */
   complete: boolean;
-  /** The values per lead and node (lead-major), NaN where missing: what the texture holds, on the CPU. */
-  nodes: Float32Array;
 };
+
 
 /** Catmull-Rom weights for the four samples around a fraction t (at -1, 0, 1, 2). */
 function catmull(t: number, w: Float32Array): void {
@@ -96,7 +95,6 @@ export function weatherTexture(device: Device, g: WeatherGrid, src: WeatherSourc
   const per = g.cols * g.rows;
   const depth = src.depth;
   let complete = true;
-  const nodes = new Float32Array(depth * per).fill(NaN);
   const data = new Uint16Array(depth * per);
   const nan = toHalf(NaN);
   const out = toHalf(-Infinity);
@@ -109,10 +107,7 @@ export function weatherTexture(device: Device, g: WeatherGrid, src: WeatherSourc
     if (!Number.isFinite(x)) {
       // outside the HRRR grid: -Infinity at every hour, so the shader can tell "no weather here, ever" from
       // "not in hand yet" (NaN) and draw nothing there rather than the standing ground
-      for (let l = 0; l < depth; l++) {
-        data[l * per + k] = out;
-        nodes[l * per + k] = -Infinity;
-      }
+      for (let l = 0; l < depth; l++) data[l * per + k] = out;
       continue;
     }
     // the 4 x 4 pixel centers around the node with Catmull-Rom weights (a smooth surface through the pixel
@@ -165,9 +160,7 @@ export function weatherTexture(device: Device, g: WeatherGrid, src: WeatherSourc
     }
     for (let l = 0; l < depth; l++) {
       if (wsum[l]! > 1e-6) {
-        const v = acc[l]! / wsum[l]!;
-        data[l * per + k] = toHalf(v);
-        nodes[l * per + k] = v;
+        data[l * per + k] = toHalf(acc[l]! / wsum[l]!);
       } else {
         data[l * per + k] = nan;
         complete = false;
@@ -184,5 +177,5 @@ export function weatherTexture(device: Device, g: WeatherGrid, src: WeatherSourc
     data,
     sampler: { minFilter: "linear", magFilter: "linear", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" },
   });
-  return { tex, complete, nodes };
+  return { tex: forgetData(tex), complete };
 }

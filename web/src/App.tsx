@@ -466,7 +466,8 @@ export default function App() {
   depthRef.current = timeDepth;
   const weatherKey = timeMode === "week" && week ? `week|${week.id}` : `${ignitionLike ? "ignition" : "ffwi"}|run`;
 
-  // ---- hover: lon/lat -> class under the cursor and FFWI at the HRRR pixel
+  // ---- hover: lon/lat -> class under the cursor and the hour's weather term at the HRRR pixel (the FFWI itself only in
+  // the run mode; the week keeps the term alone)
   const [hover, setHover] = useState<{ lon: number; lat: number; x: number; y: number } | null>(null);
   const hoverInfo = useMemo(() => {
     if (!hover) return null;
@@ -477,7 +478,7 @@ export default function App() {
     const ci = ground ? (teacher === "nlcd" ? ground.nlcd : ground.esri) : NO_CLASS;
     const className = ci === NO_CLASS ? null : HEADS[teacher].names[ci]!;
     const weight = ci === NO_CLASS ? 0 : fuelOf(teacher, ci);
-    const ffwi = inWeek ? (px && week ? week.ffwiAt(px.x, px.y, hourIdx) : NaN) : (wx?.ffwi ?? NaN);
+    const ffwi = inWeek ? NaN : (wx?.ffwi ?? NaN);
     const wl = px
       ? inWeek
         ? (week ? week.termAt(px.x, px.y, hourIdx) : NaN)
@@ -865,7 +866,7 @@ export default function App() {
           </div>
         </div>
       ) : null}
-      {fuel !== "counties" && hover && hoverInfo && (hoverInfo.className || Number.isFinite(hoverInfo.ffwi)) ? (
+      {fuel !== "counties" && hover && hoverInfo && (hoverInfo.className || Number.isFinite(hoverInfo.wx0)) ? (
         <div style={tooltipStyle(hover.x, hover.y)}>
           <div style={{ fontWeight: 600 }}>
             {hoverInfo.ground
@@ -882,8 +883,8 @@ export default function App() {
           <div>
             {hoverInfo.wx && Number.isFinite(hoverInfo.wx.ffwi)
               ? `FFWI ${hoverInfo.wx.ffwi.toFixed(0)} · wind ${hoverInfo.wx.windMph} mph · RH ${hoverInfo.wx.rh}% · ${hoverInfo.wx.tc} °C`
-              : Number.isFinite(hoverInfo.ffwi)
-                ? `FFWI ${hoverInfo.ffwi.toFixed(0)}`
+              : Number.isFinite(hoverInfo.wx0)
+                ? ""
                 : "forecast not loaded here yet"}
             {tauHours > 0 ? ` (fuel lag ${tauHours} h)` : ""}
           </div>

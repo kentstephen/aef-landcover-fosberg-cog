@@ -59,10 +59,23 @@ export function toHalf(x: number): number {
   return half;
 }
 
+/**
+ * Let go of the array a texture was made from. luma.gl keeps every prop a resource was created with, the
+ * upload data included, so without this each texture pins a CPU copy of itself for as long as it lives
+ * (a week's weather texture is 2 MB a tile). The data is read once, at creation.
+ */
+export function forgetData(tex: Texture): Texture {
+  // the resource's props, and the copy its default view keeps
+  const t = tex as unknown as { props: { data?: unknown }; view?: { props?: { data?: unknown } } };
+  t.props.data = undefined;
+  if (t.view?.props) t.view.props.data = undefined;
+  return tex;
+}
+
 function halfTexture(device: Device, width: number, height: number, values: Float32Array): Texture {
   const data = new Uint16Array(values.length);
   for (let i = 0; i < values.length; i++) data[i] = toHalf(values[i]!);
-  return device.createTexture({
+  return forgetData(device.createTexture({
     dimension: "2d-array",
     format: "r16float",
     width,
@@ -71,7 +84,7 @@ function halfTexture(device: Device, width: number, height: number, values: Floa
     mipLevels: 1,
     data,
     sampler: { minFilter: "nearest", magFilter: "nearest", addressModeU: "clamp-to-edge", addressModeV: "clamp-to-edge" },
-  });
+  }));
 }
 
 /**
