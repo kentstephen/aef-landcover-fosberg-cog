@@ -227,6 +227,7 @@ export function ControlPanel(p: ControlPanelProps) {
           {min ? "▸" : "▾"}
         </button>
       </div>
+      {min ? <p className="pn-stamp muted small">{timeTag}</p> : null}
 
       <p>
         Every pixel's <b>AlphaEarth embedding</b> goes through a small head fit on 22,000 real wildfire ignitions (WFIGS, 2019
