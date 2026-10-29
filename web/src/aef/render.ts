@@ -181,6 +181,9 @@ float fuelHash(vec2 p) {
             if (hold > 0.0) wxG = max(wxG, wk - max(wk - (${MODULE_NAME}.wxGate - 0.5), 0.0) * min(float(k) / hold, 1.0));
           }
           z = g + wxG;
+          // the ground and the weather are one footprint: a pixel with no weather for this hour (outside
+          // the HRRR grid, or its shard not in hand yet) draws nothing, not a standing gray
+          if (wx < -90.0) discard;
         }
         // the weather field under everything: the term as gray, dark 3 logits below the gate, pale at it
         vec4 under = vec4(0.0);
