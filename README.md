@@ -1,5 +1,7 @@
 # aef-landcover-fosberg-cog
 
+**Live map: https://kentstephen.github.io/aef-landcover-fosberg-cog/** (static site, built from `main` by GitHub Actions; everything is read from the public cloud stores in the browser)
+
 A browser-only fire risk map. Land cover is read from **AlphaEarth Foundations
 embeddings** (64 bands, 10 m, public COGs and a Zarr mosaic on source.coop) by a
 tiny linear model fit offline; the **Fosberg Fire Weather Index** is computed in
