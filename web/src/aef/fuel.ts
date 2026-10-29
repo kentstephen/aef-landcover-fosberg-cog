@@ -24,25 +24,24 @@ export const FUEL_ESRI: Record<number, number> = {
 export const FUEL: Record<Teacher, Record<number, number>> = { nlcd: FUEL_NLCD, esri: FUEL_ESRI };
 
 /**
- * How long each class stays lit after the weather eases, in hours: the ground holds a past hour's
- * peak, sliding back under the gate over the class's hold. From data (ignition/burn_head.py,
- * models/burn_duration.json): the median hours from discovery to the fire's out time for WFIGS fires
- * 2019 to 2026 that started in each NLCD class (17,701 fires with an out time), capped at four days.
- * Fires in timber, shrub and grass run three to four days by that clock, pasture and crops two, built
- * ground one to two (dense built a few hours), water and ice none. The out time is the agency's, so
- * it runs past the flames; it is the same clock for every class, so the ordering holds.
+ * How long each class stays lit after the weather eases, in hours. What this stands for is fuel moisture
+ * lag: the Fosberg index uses the equilibrium moisture of fine dead fuel, which the air sets within the hour,
+ * while real fuel follows the air with a delay, cured grass and litter in a few hours, timber's heavier
+ * surface fuel over about a day, built ground and water not at all. First cut, by that reasoning, not fit.
+ * (The fires' own durations were measured, ignition/burn_head.py and docs/burn-duration.md: median agency
+ * hours from discovery to out, 2 to 4 days in every class; that is a close-out clock, not flame time, and
+ * holding the ground that long glued the picture, so it is not used here.)
  */
 export const HOLD_NLCD: Record<number, number> = {
   11: 0, 12: 0,
-  21: 51, 22: 45, 23: 27, 24: 3,
-  31: 63,
-  41: 94, 42: 96, 43: 27,
-  52: 95, 71: 90, 81: 45, 82: 45,
-  90: 51, 95: 78,
+  21: 3, 22: 2, 23: 0, 24: 0,
+  31: 2,
+  41: 18, 42: 24, 43: 20,
+  52: 6, 71: 3, 81: 3, 82: 3,
+  90: 12, 95: 6,
 };
-/** The Esri classes carried over from their NLCD counterparts (trees 96, rangeland 93, flooded vegetation 65). */
 export const HOLD_ESRI: Record<number, number> = {
-  1: 0, 2: 96, 4: 65, 5: 45, 7: 40, 8: 63, 9: 0, 10: 0, 11: 93,
+  1: 0, 2: 20, 4: 10, 5: 4, 7: 2, 8: 2, 9: 0, 10: 0, 11: 6,
 };
 export const HOLD: Record<Teacher, Record<number, number>> = { nlcd: HOLD_NLCD, esri: HOLD_ESRI };
 /** The hold hours are stored in the lookup texture as a byte, hours x HOLD_SCALE (so up to 127 h). */

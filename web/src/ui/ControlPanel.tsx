@@ -413,19 +413,18 @@ export function ControlPanel(p: ControlPanelProps) {
             <span className="row">
               <span>{p.glowHours === 0 ? "Afterglow: off (this hour only)" : `Afterglow: looks back ${p.glowHours} h, the ground holding by land cover`}</span>
               <Help label="Afterglow">
-                The ignition head says when a fire could start; a fire that started keeps burning. So the ground holds the
-                strongest recent hour by what it is: it stays lit for the land cover's hold hours after that hour, fading
-                from its peak back under the gate over that time. The hold is the median hours from discovery to out for
-                the WFIGS fires of 2019 to 2026 that started in that land cover: timber, shrub and grass three to four days,
-                pasture and crops two, built ground one to two, water none. The gray weather field
-                keeps the weather's own memory, 0.3 logit an hour, so the current moves on while the ground remembers it.
+                Off by default, and the data say off: at the same point, once this hour's weather is in, the past day's peak
+                FFWI adds nothing to the chance of an ignition (its weight goes slightly negative), and rain in the past
+                three days subtracts. The hour is what matters. Turned on, the ground holds the strongest recent hour by
+                what it is, for the land cover's hold hours (a stand-in for fuel moisture lagging the air: grass a few
+                hours, timber a day), and the gray weather field keeps 0.3 logit an hour.
                 Hold hours ({p.teacher === "nlcd" ? "NLCD" : "Esri"}):{" "}
                 {HEADS[p.teacher].classes.map((code, i) => `${HEADS[p.teacher].names[i]} ${HOLD[p.teacher][code] ?? 0}`).join(", ")}.
               </Help>
             </span>
           }
         >
-          <Slider min={0} max={48} step={1} value={p.glowHours} onChange={p.onGlowHoursChange} label="Afterglow hours" onReset={() => p.onGlowHoursChange(24)} />
+          <Slider min={0} max={48} step={1} value={p.glowHours} onChange={p.onGlowHoursChange} label="Afterglow hours" onReset={() => p.onGlowHoursChange(0)} />
         </Field>
         {/* grain (the fill broken into cells): off, not offered
         <Field label={p.grain === 0 ? "Grain: off (flat fill)" : `Grain: ${p.grain} cells across a tile`}>

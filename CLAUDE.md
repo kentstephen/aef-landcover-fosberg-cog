@@ -40,9 +40,11 @@ maps), then the TypeScript map.
   1000 km2 per day, 2.2x the CONUS mean". The picture (ramp, gate) does not use the calibration.
 - Burn side done (`ignition/burn_head.py`, `docs/burn-duration.md`, `models/burn_duration.json`): the
   embedding beats the NLCD class on duration and size (log size R2 0.28 vs 0.13; 100-acre AUC 0.81 vs 0.72).
-  The hold hours in `fuel.ts` are now the class medians of hours from discovery to out (timber, shrub,
-  grass 90 to 96 h capped at 96; pasture and crops 45; built 3 to 51; water 0; HOLD_SCALE 2), so with the
-  24 h lookback the wildland ground keeps the day's peak through the day.
+  The class medians of hours from discovery to out (2 to 4 days, an agency clock) were tried as the hold
+  hours and glued the picture; reverted to the fuel-lag first cut. Then `ignition/hour_memory.py`
+  (`docs/hour-memory.md`): at the same point the past day's peak FFWI adds nothing to this hour's
+  ignition chance (weight slightly negative), rain in the past 72 h subtracts. The afterglow now
+  defaults to OFF; the hour is the signal. Hourly swing at a point is about half the spread across points.
 - Ramps evened on lightness (`ramp.ts` evenLightness: mean of normal and protan L*, linear from each
   ramp's first stop to its last) so one slider position is the same brightness on every ramp.
 - Nothing is written to disk for HRRR anymore: `hrrr/shard-disk.ts` is gone; the run mode holds its

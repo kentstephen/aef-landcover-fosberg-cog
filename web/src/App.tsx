@@ -285,7 +285,8 @@ export default function App() {
   const [fuelOpacity, setFuelOpacity] = useState(0.9);
   const [groundRamp, setGroundRamp] = useState<GroundRamp>("viridis");
   /** Hours of afterglow on the ground (0 = this hour only). */
-  const [glowHours, setGlowHours] = useState(24);
+  // off by default: at the same point the past day's peak adds nothing to this hour (ignition/hour_memory.py)
+  const [glowHours, setGlowHours] = useState(0);
   /** Grain cells across a tile (0 = flat fill). */
   const [grain, setGrain] = useState(0);
   /** The ground drawn as light (additive) rather than paint. */
