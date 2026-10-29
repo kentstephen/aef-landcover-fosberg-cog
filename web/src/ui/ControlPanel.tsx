@@ -44,6 +44,8 @@ export type FuelChoice = "ignition" | "lit" | "cover" | "off";
 export type IgnScale = "probability" | "logit" | "rank";
 /** The time axis: one 48 h forecast run, or a week of daily 12Z runs stitched hour by hour. */
 export type TimeMode = "run" | "week";
+/** The longest window: each day is about 430 MB over the wire for the whole country, 90 MB of bytes in memory. */
+export const MAX_WEEK_DAYS = 14;
 
 export type Status = {
   backend: "icechunk" | "zarr-v3" | null;
@@ -445,17 +447,39 @@ export function ControlPanel(p: ControlPanelProps) {
         </div>
         {p.timeMode === "week" ? (
           <>
-            <Field label={`Days (UTC): ${isoDateString(p.weekStart)} to ${isoDateString(weekEnd)}, ${p.weekDays} day${p.weekDays === 1 ? "" : "s"}`}>
-              <div className="row">
+            <Field label={`Window (UTC): ${p.weekDays} day${p.weekDays === 1 ? "" : "s"}, up to ${MAX_WEEK_DAYS} (about ${Math.round(p.weekDays * 0.43 * 10) / 10} GB over the wire for the whole country, 25 MB a day for a region)`}>
+              <div className="row" style={{ flexWrap: "nowrap", alignItems: "center", gap: 6 }}>
                 <input
                   type="date"
+                  aria-label="First day"
                   min={isoDateString(INIT_TIME_ORIGIN)}
                   max={p.initTimeCount > 0 ? isoDateString(dateFromInitTimeIdx(p.initTimeCount - 1)) : undefined}
                   value={isoDateString(p.weekStart)}
                   disabled={p.initTimeCount === 0}
-                  onChange={(e) => { if (e.target.value) p.onWeekStartChange(new Date(`${e.target.value}T00:00:00Z`)); }}
+                  onChange={(e) => {
+                    if (!e.target.value) return;
+                    const start = new Date(`${e.target.value}T00:00:00Z`);
+                    // keep the end day where it is when it still fits; else keep the length
+                    const days = Math.round((weekEnd.getTime() - start.getTime()) / 864e5) + 1;
+                    p.onWeekStartChange(start);
+                    if (days >= 1 && days <= MAX_WEEK_DAYS) p.onWeekDaysChange(days);
+                  }}
                 />
-                <Slider min={1} max={14} step={1} value={p.weekDays} onChange={p.onWeekDaysChange} label="Days" onReset={() => p.onWeekDaysChange(7)} />
+                <span className="muted small">to</span>
+                <input
+                  type="date"
+                  aria-label="Last day"
+                  min={isoDateString(p.weekStart)}
+                  max={isoDateString(new Date(Math.min(p.weekStart.getTime() + (MAX_WEEK_DAYS - 1) * 864e5, p.initTimeCount > 0 ? dateFromInitTimeIdx(p.initTimeCount - 1).getTime() : Infinity)))}
+                  value={isoDateString(weekEnd)}
+                  disabled={p.initTimeCount === 0}
+                  onChange={(e) => {
+                    if (!e.target.value) return;
+                    const end = new Date(`${e.target.value}T00:00:00Z`);
+                    const days = Math.round((end.getTime() - p.weekStart.getTime()) / 864e5) + 1;
+                    p.onWeekDaysChange(Math.max(1, Math.min(MAX_WEEK_DAYS, days)));
+                  }}
+                />
               </div>
             </Field>
             <div className="days" role="list" aria-label="Days of the week in hand">
