@@ -1,4 +1,4 @@
-"""The browser's AEF index: every 2025 COG that touches CONUS, its bounds, and the byte ranges of its
+"""The browser's AEF index: every 2025 COG that touches the HRRR grid, its bounds, and the byte ranges of its
 coarse overview levels, so the map reads one range per file and level with no header round trip.
 
 Writes web/public/aef-2025-conus.json:
@@ -24,12 +24,19 @@ from pathlib import Path
 import duckdb
 import fsspec
 import tifffile
+from pyproj import CRS, Transformer
 
 ROOT = Path(__file__).resolve().parents[1]
 INDEX = "https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/tge-labs/aef/v1/annual/aef_index.parquet"
 YEAR = int(sys.argv[1]) if len(sys.argv) > 1 else 2025
 BASE = f"https://s3.us-west-2.amazonaws.com/us-west-2.opendata.source.coop/tge-labs/aef/v1/annual/{YEAR}/"
-CONUS = (-125.0, 24.0, -66.9, 49.6)
+# The files kept are the ones that touch the HRRR grid (Lambert conformal, 1799 x 1059 px of 3 km):
+# the ground where there is weather, into Canada and Mexico as far as the forecast goes. The box is
+# only a first cut for the query; the grid's rectangle does the real test.
+HRRR_PROJ = "+proj=lcc +lat_1=38.5 +lat_2=38.5 +lat_0=38.5 +lon_0=-97.5 +x_0=0 +y_0=0 +R=6371229 +units=m +no_defs"
+HRRR_X0, HRRR_Y0, HRRR_DX, HRRR_W, HRRR_H = -2699020.142521929, 1588193.847443335, 3000, 1799, 1059
+HRRR_BOX = (-135.0, 20.5, -60.0, 53.5)
+CONUS = HRRR_BOX
 LEVELS = [1024, 512, 256, 128, 64, 32, 16]
 BLOCK = 1024
 OUT_JSON = ROOT / "web" / "public" / f"aef-{YEAR}-conus.json"
@@ -85,7 +92,23 @@ def main():
         """
     ).fetchall()
     files = []
+    tr = Transformer.from_crs("EPSG:4326", CRS.from_proj4(HRRR_PROJ), always_xy=True)
+    xmax, ymin = HRRR_X0 + HRRR_DX * HRRR_W, HRRR_Y0 - HRRR_DX * HRRR_H
     for path, w, s, e, n, zone, crs, uw, us in rows:
+        # the file touches the grid when any point of its outline falls inside the grid's rectangle
+        # (the outline is sampled; a file is 82 km, the grid 5,400 x 3,200 km, so no edge slips between)
+        k = 9
+        ring = [(w + (e - w) * i / k, s) for i in range(k + 1)] + [(e, s + (n - s) * i / k) for i in range(k + 1)]
+        ring += [(w + (e - w) * i / k, n) for i in range(k + 1)] + [(w, s + (n - s) * i / k) for i in range(k + 1)]
+        ring += [((w + e) / 2, (s + n) / 2)]
+        inside = False
+        for lon, lat in ring:
+            x, y = tr.transform(lon, lat)
+            if HRRR_X0 <= x <= xmax and ymin <= y <= HRRR_Y0:
+                inside = True
+                break
+        if not inside:
+            continue
         files.append(dict(rel=path.split(f"/annual/{YEAR}/", 1)[1], bbox=[round(w, 4), round(s, 4), round(e, 4), round(n, 4)], zone=zone, epsg=int(crs.split(":")[1]), uw=uw, us=us))
     print(f"{len(files)} files", flush=True)
 

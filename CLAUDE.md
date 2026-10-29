@@ -103,7 +103,8 @@ maps), then the TypeScript map.
   - `render.ts` shader: class -> color and fuel weight from a lookup texture, FFWI from a
     per-tile weather texture (49 leads, bilinear over HRRR pixels, `weather.ts`).
 - Index: `scripts/build_aef_index.py` (DuckDB + tifffile, 8 threads, about 2 min) writes
-  `web/public/aef-2025-conus.json` (1982 files, bounds, UTM origin) and one
+  `web/public/aef-2025-conus.json` (2220 files: every COG touching the HRRR grid, into Canada and
+  Mexico as far as the forecast goes; bounds, UTM origin) and one
   `aef-2025-ranges-<zone>.bin` per UTM zone (per file: the span of each coarse level, widths
   1024 to 16 px, and each band's block offset and length inside it; sparse blocks are 0, 0).
 - HRRR shards (the Fosberg inputs) are kept on disk too (`hrrr/shard-disk.ts`), so a run looked
@@ -150,7 +151,7 @@ maps), then the TypeScript map.
 ```sh
 cd web && npm install && PORT=5372 npm run dev   # 5371 and 3000 are taken on this machine
 npm run build && npm run typecheck
-uv run --with duckdb --with tifffile --with fsspec --with aiohttp --with requests scripts/build_aef_index.py   # the COG index + byte ranges
+uv run --with duckdb --with tifffile --with fsspec --with aiohttp --with requests --with pyproj scripts/build_aef_index.py   # the COG index + byte ranges
 
 uv run scripts/sample_landcover.py              # data/tiles/<site>.npz, one tile at a time
 uv run scripts/fit_landcover_head.py            # models/*.json, data/previews/*.png
