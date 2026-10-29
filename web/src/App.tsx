@@ -94,6 +94,8 @@ function addHillshade(map: import("maplibre-gl").Map, on: boolean) {
 
 export default function App() {
   const mapRef = useRef<MapRef>(null);
+  /** Whether the cursor picks (the tooltip); Q toggles it. */
+  const pickRef = useRef(true);
   const cacheRef = useRef(new FfwiTileCache());
   const [cacheVersion, setCacheVersion] = useState(0);
   useEffect(() => {
@@ -201,14 +203,19 @@ export default function App() {
       const space = e.code === "Space" || e.key === " ";
       const full = e.key === "f" || e.key === "F";
       const labels = e.key === "l" || e.key === "L";
-      if (!space && !full && !labels) return;
+      const pick = e.key === "q" || e.key === "Q";
+      if (!space && !full && !labels && !pick) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "BUTTON" || tag === "SELECT" || el?.isContentEditable) return;
       e.preventDefault();
       if (space) setIsPlaying((p) => !p);
-      else if (labels) {
+      else if (pick) {
+        // the tooltip under the cursor on or off (off for a clean recording)
+        pickRef.current = !pickRef.current;
+        if (!pickRef.current) setHover(null);
+      } else if (labels) {
         // the basemap's text and icons (every symbol layer of the style) on or off
         const m = mapRef.current?.getMap();
         if (!m) return;
@@ -587,7 +594,7 @@ export default function App() {
         }}
         onMove={(e) => setZoom(e.viewState.zoom)}
         onMoveEnd={(e) => readView(e.target)}
-        onMouseMove={(e) => setHover({ lon: e.lngLat.lng, lat: e.lngLat.lat, x: e.point.x, y: e.point.y })}
+        onMouseMove={(e) => { if (pickRef.current) setHover({ lon: e.lngLat.lng, lat: e.lngLat.lat, x: e.point.x, y: e.point.y }); }}
         onMouseOut={() => setHover(null)}
       >
         <DeckGlOverlay layers={deckLayers as never} interleaved onDeviceInitialized={setDevice} />
