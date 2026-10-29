@@ -138,6 +138,8 @@ export type ControlPanelProps = {
   standingAlpha: number;
   onStandingAlphaChange: (v: number) => void;
   wxGate: number;
+  fieldAlpha: number;
+  onFieldAlphaChange: (v: number) => void;
   onWxGateChange: (v: number) => void;
   /** The weather term under the cursor, to read the gate against. */
   wxNow: number | null;
@@ -345,6 +347,22 @@ export function ControlPanel(p: ControlPanelProps) {
             {p.standingAlpha > 0 ? (
               <Field label={`Weather gate: opaque from a weather term of ${p.wxGate >= 0 ? "+" : ""}${p.wxGate.toFixed(1)}${p.wxNow != null ? ` (under the cursor now ${p.wxNow >= 0 ? "+" : ""}${p.wxNow.toFixed(1)})` : ""}`}>
                 <Slider min={-2} max={4} step={0.1} value={p.wxGate} onChange={p.onWxGateChange} label="Weather gate" onReset={() => p.onWxGateChange(1.0)} />
+              </Field>
+            ) : null}
+            {p.useWeather ? (
+              <Field
+                label={
+                  <span className="row">
+                    <span>{p.fieldAlpha === 0 ? "Weather field under the ground: off" : `Weather field under the ground at ${Math.round(p.fieldAlpha * 100)}%`}</span>
+                    <Help label="Weather field">
+                      The hour's weather term drawn in gray under everything, ground or not: dark where calm, pale as it
+                      nears the gate, so the weather's currents move across the dead space. Where it crosses the gate over
+                      fuel, the ground's color sits on top; it is the same term, so the two line up exactly.
+                    </Help>
+                  </span>
+                }
+              >
+                <Slider min={0} max={0.8} step={0.05} value={p.fieldAlpha} onChange={p.onFieldAlphaChange} label="Weather field opacity" onReset={() => p.onFieldAlphaChange(0.35)} />
               </Field>
             ) : null}
             <div className="row">

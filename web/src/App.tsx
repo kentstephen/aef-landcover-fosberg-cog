@@ -257,6 +257,7 @@ export default function App() {
   /** The standing picture: the ground's probability faint all the time, opaque where the hour's weather crosses the gate. */
   const [standingAlpha, setStandingAlpha] = useState(0.25);
   const [wxGate, setWxGate] = useState(1.0);
+  const [fieldAlpha, setFieldAlpha] = useState(0.35);
   // one picture at a time: drawing the field puts the ground off, and the ground back on puts the field away
   const setShowRaster = useCallback((on: boolean) => {
     setShowRasterState(on);
@@ -492,6 +493,7 @@ export default function App() {
           useWeather,
           standingAlpha,
           wxGate,
+          fieldAlpha,
           glowHours,
           grain,
           light,
@@ -526,7 +528,7 @@ export default function App() {
   }, [
     showRaster, source, getTileData, colormapTexture, initTimeIdx, windMode, rasterVariable, selection, renderTile, rasterOpacity,
     leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity, groundRamp, zoom,
-    glowHours, grain, light, contourLines, pHide, pMax, ignScale, zLo, zHi, rankRamp, useWeather, standingAlpha, wxGate,
+    glowHours, grain, light, contourLines, pHide, pMax, ignScale, zLo, zHi, rankRamp, useWeather, standingAlpha, wxGate, fieldAlpha,
     timeIdx, weatherSrc, weatherKey, timeMode,
   ]);
 
@@ -661,6 +663,8 @@ export default function App() {
         standingAlpha={standingAlpha}
         onStandingAlphaChange={setStandingAlpha}
         wxGate={wxGate}
+        fieldAlpha={fieldAlpha}
+        onFieldAlphaChange={setFieldAlpha}
         onWxGateChange={setWxGate}
         wxNow={hoverInfo && Number.isFinite(hoverInfo.wx0) ? hoverInfo.wx0 : null}
 

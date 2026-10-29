@@ -33,6 +33,12 @@ export type FuelLightProps = {
    */
   standingAlpha: number;
   wxGate: number;
+  /**
+   * The weather field under everything (0 = off): the hour's weather term drawn as gray at this opacity over
+   * every pixel the weather covers, ground or not, dark where calm and pale at the gate, so the weather's
+   * currents show in the dead space; the ground's color sits on top where the gate is crossed.
+   */
+  fieldAlpha: number;
   layerIndex: number;
   hideBelow: number;
   rescaleMax: number;
@@ -72,6 +78,7 @@ uniform ${MODULE_NAME}Uniforms {
   float useWeather;
   float standingAlpha;
   float wxGate;
+  float fieldAlpha;
 } ${MODULE_NAME};
 `,
   inject: {
@@ -91,12 +98,14 @@ float fuelHash(vec2 p) {
 `,
     "fs:DECKGL_FILTER_COLOR": /* glsl */ `
       float ci = texture(classTex, geometry.uv).r * 255.0;
-      if (ci > 254.5) discard;
-      vec4 lut = texelFetch(lutTex, ivec2(int(ci + 0.5), 0), 0);
+      bool hasGround = ci <= 254.5;
+      bool field = ${MODULE_NAME}.mode > 1.5 && ${MODULE_NAME}.fieldAlpha > 0.0 && ${MODULE_NAME}.useWeather > 0.5;
+      if (!hasGround && !field) discard;
+      vec4 lut = hasGround ? texelFetch(lutTex, ivec2(int(ci + 0.5), 0), 0) : vec4(0.0);
       if (${MODULE_NAME}.mode > 1.5) {
         // the ignition head: ground logit (per pixel) plus the hour's weather logit (per node), sigmoid;
         // with the afterglow on, the brightest of the hours behind, each losing 0.3 logit per hour
-        float g = texture(groundTex, geometry.uv).r * ${IGN_HI - IGN_LO}.0 + (${IGN_LO}.0);
+        float g = hasGround ? texture(groundTex, geometry.uv).r * ${IGN_HI - IGN_LO}.0 + (${IGN_LO}.0) : 0.0;
         float z = g;
         // the hour's weather term, with the afterglow: the strongest recent hour, losing 0.3 logit per hour
         float wx = -99.0;
@@ -114,32 +123,49 @@ float fuelHash(vec2 p) {
           }
           z = g + wx;
         }
-        bool standing = ${MODULE_NAME}.standingAlpha > 0.0 && ${MODULE_NAME}.useWeather > 0.5;
-        // standing: how far the weather is across the gate (0 = calm, 1 = lit), over half a logit
-        float lit = standing ? smoothstep(${MODULE_NAME}.wxGate, ${MODULE_NAME}.wxGate + 0.5, wx) : 1.0;
-        float zc = standing ? mix(g, z, lit) : z;
-        float t;
-        if (${MODULE_NAME}.scale > 0.5) {
-          if (!standing && zc < ${MODULE_NAME}.zLo) discard;
-          t = clamp((zc - ${MODULE_NAME}.zLo) / max(${MODULE_NAME}.zHi - ${MODULE_NAME}.zLo, 0.01), 0.0, 1.0);
-        } else {
-          float pr = 1.0 / (1.0 + exp(-zc));
-          if (!standing && pr < ${MODULE_NAME}.pHide) discard;
-          t = clamp((pr - ${MODULE_NAME}.pHide) / max(${MODULE_NAME}.pMax - ${MODULE_NAME}.pHide, 0.0001), 0.0, 1.0);
+        // the weather field under everything: the term as gray, dark 3 logits below the gate, pale at it
+        vec4 under = vec4(0.0);
+        if (field && wx > -90.0) {
+          float tf = clamp((wx - (${MODULE_NAME}.wxGate - 3.0)) / 4.0, 0.0, 1.0);
+          under = vec4(vec3(0.10 + 0.80 * tf), ${MODULE_NAME}.fieldAlpha);
         }
-        float a = standing ? mix(${MODULE_NAME}.standingAlpha, 1.0, lit) : min(1.0, t / 0.15);
-        if (${MODULE_NAME}.grain > 0.0) {
-          vec2 cell = floor(geometry.uv * ${MODULE_NAME}.grain);
-          float h = fuelHash(cell + vec2(0.37, 0.91));
-          a *= smoothstep(h - 0.08, h + 0.08, 0.1 + 0.9 * t);
-          if (a < 0.01) discard;
+        vec3 rgb = vec3(0.0);
+        float a = 0.0;
+        if (hasGround) {
+          bool standing = ${MODULE_NAME}.standingAlpha > 0.0 && ${MODULE_NAME}.useWeather > 0.5;
+          // standing: how far the weather is across the gate (0 = calm, 1 = lit), over half a logit
+          float lit = standing ? smoothstep(${MODULE_NAME}.wxGate, ${MODULE_NAME}.wxGate + 0.5, wx) : 1.0;
+          float zc = standing ? mix(g, z, lit) : z;
+          float t;
+          bool hide = false;
+          if (${MODULE_NAME}.scale > 0.5) {
+            if (!standing && zc < ${MODULE_NAME}.zLo) hide = true;
+            t = clamp((zc - ${MODULE_NAME}.zLo) / max(${MODULE_NAME}.zHi - ${MODULE_NAME}.zLo, 0.01), 0.0, 1.0);
+          } else {
+            float pr = 1.0 / (1.0 + exp(-zc));
+            if (!standing && pr < ${MODULE_NAME}.pHide) hide = true;
+            t = clamp((pr - ${MODULE_NAME}.pHide) / max(${MODULE_NAME}.pMax - ${MODULE_NAME}.pHide, 0.0001), 0.0, 1.0);
+          }
+          a = hide ? 0.0 : standing ? mix(${MODULE_NAME}.standingAlpha, 1.0, lit) : min(1.0, t / 0.15);
+          if (${MODULE_NAME}.grain > 0.0) {
+            vec2 cell = floor(geometry.uv * ${MODULE_NAME}.grain);
+            float h = fuelHash(cell + vec2(0.37, 0.91));
+            a *= smoothstep(h - 0.08, h + 0.08, 0.1 + 0.9 * t);
+          }
+          rgb = texture(rampTex, vec2(t, 0.5)).rgb;
+          if (standing) {
+            // the standing picture in gray (the ramp's luminance), color only where the hour lifts the pixel
+            float lum = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
+            rgb = mix(vec3(lum), rgb, lit);
+          }
         }
-        vec3 rgb = texture(rampTex, vec2(t, 0.5)).rgb;
-        if (standing) {
-          // the standing picture in gray (the ramp's luminance), color only where the hour lifts the pixel
-          float lum = dot(rgb, vec3(0.2126, 0.7152, 0.0722));
-          rgb = mix(vec3(lum), rgb, lit);
+        if (under.a > 0.0) {
+          // the ground over the field
+          float ao = a + under.a * (1.0 - a);
+          rgb = (rgb * a + under.rgb * under.a * (1.0 - a)) / max(ao, 1e-4);
+          a = ao;
         }
+        if (a < 0.01) discard;
         color = vec4(rgb, a);
       } else if (${MODULE_NAME}.mode > 0.5) {
         color = vec4(lut.rgb, 1.0);
@@ -173,7 +199,7 @@ float fuelHash(vec2 p) {
       }
     `,
   },
-  uniformTypes: { mode: "f32", layerIndex: "f32", hideBelow: "f32", rescaleMax: "f32", glowHours: "f32", grain: "f32", pHide: "f32", pMax: "f32", scale: "f32", zLo: "f32", zHi: "f32", useWeather: "f32", standingAlpha: "f32", wxGate: "f32" },
+  uniformTypes: { mode: "f32", layerIndex: "f32", hideBelow: "f32", rescaleMax: "f32", glowHours: "f32", grain: "f32", pHide: "f32", pMax: "f32", scale: "f32", zLo: "f32", zHi: "f32", useWeather: "f32", standingAlpha: "f32", wxGate: "f32", fieldAlpha: "f32" },
   getUniforms: (p: Partial<FuelLightProps>) => ({
     mode: p.mode ?? 0,
     layerIndex: p.layerIndex ?? 0,
@@ -189,6 +215,7 @@ float fuelHash(vec2 p) {
     useWeather: p.useWeather ?? 1,
     standingAlpha: p.standingAlpha ?? 0,
     wxGate: p.wxGate ?? 1,
+    fieldAlpha: p.fieldAlpha ?? 0,
     classTex: p.classTex,
     groundTex: p.groundTex,
     ffwiTex: p.ffwiTex,
