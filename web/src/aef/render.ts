@@ -54,8 +54,8 @@ const MODULE_NAME = "fuelLight";
  * Per fragment: the pixel's class (r8, nearest) -> its column in the lookup texture (row 0 rgb the
  * class color, a its fuel weight; row 1 r its hold hours) -> either the class color, or the lit
  * value: the hour's FFWI at this spot (the weather texture, linear) times the fuel weight, and with
- * the afterglow on, the brightest of the hours behind it, each faded by exp(-age / hold) so fine
- * fuels let go of a windy hour in a few hours and timber holds it for a day. Hidden below the hide
+ * the afterglow on, the brightest of the hours behind it, each held for the class's hold hours (from
+ * the fires' own durations: wildland days, built ground a day or less). Hidden below the hide
  * line and ramped (viridis) from there to the ramp top, fading in over the first part of the ramp
  * so the ground comes up as the weather worsens instead of switching on. With grain on, the fill
  * breaks into ground-fixed grain whose density follows the value, so the ramp reads as texture.
@@ -111,7 +111,7 @@ float fuelHash(vec2 p) {
         // short memory (the strongest recent hour losing 0.3 logit per hour); the ground holds the hour by
         // what it is (row 1 of the lookup: hold hours per land cover): a past hour's term slides from its
         // value down to half a logit under the gate over the hold, so the ground stays lit for that long
-        // after its peak whatever the peak was; grass a few hours, timber through the night, built ground none
+        // after its peak whatever the peak was; timber, shrub and grass for days, built ground a day or less
         float wx = -99.0;
         float wxG = -99.0;
         float hold = hasGround ? texelFetch(lutTex, ivec2(int(ci + 0.5), 1), 0).r * 255.0 / ${HOLD_SCALE}.0 : 0.0;

@@ -54,20 +54,77 @@ export const MAGMA_STOPS = [
   "#feca8d", "#fed395", "#fdda9c", "#fde3a5", "#fcecae", "#fcf6b8", "#fcfdbf", "#fcfdc8", "#fdfed0", "#fefed9",
 ];
 
-export type GroundRamp = "viridis" | "inferno" | "magma" | "solar" | "fire";
-export const GROUND_RAMPS: { id: GroundRamp; label: string; stops: readonly string[] }[] = [
-  { id: "viridis", label: "Viridis", stops: VIRIDIS_STOPS },
-  { id: "inferno", label: "Inferno", stops: INFERNO_STOPS },
-  { id: "magma", label: "Magma", stops: MAGMA_STOPS },
-  { id: "solar", label: "Solar", stops: SOLAR_STOPS },
-  { id: "fire", label: "Fire", stops: FIRE_STOPS },
-];
-export const rampStops = (id: GroundRamp): readonly string[] => GROUND_RAMPS.find((r) => r.id === id)!.stops;
-
 export function hexToRgb(hex: string): [number, number, number] {
   const n = parseInt(hex.slice(1), 16);
   return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
 }
+
+const rgbToHex = (c: [number, number, number]) => "#" + c.map((v) => Math.round(Math.max(0, Math.min(255, v))).toString(16).padStart(2, "0")).join("");
+
+const toLinear = (v: number) => {
+  const c = v / 255;
+  return c <= 0.04045 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+};
+const toLstar = (y: number) => (y <= 0.008856 ? 903.3 * y : 116 * Math.cbrt(y) - 16);
+
+/** CIE L* (0 black to 100 white) of an sRGB color: how light it looks. */
+export function lightness([r, g, b]: [number, number, number]): number {
+  return toLstar(0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b));
+}
+
+/**
+ * The same color's lightness as a protanope sees it: the color through the Machado (2009) protanopia
+ * matrix in linear RGB, then L*. Red carries almost no brightness for a protan, so a ramp's crimson
+ * and orange middle reads darker than its L* says.
+ */
+export function protanLightness([r, g, b]: [number, number, number]): number {
+  const R = toLinear(r);
+  const G = toLinear(g);
+  const B = toLinear(b);
+  const r2 = 0.152286 * R + 1.052583 * G - 0.204868 * B;
+  const g2 = 0.114503 * R + 0.786281 * G + 0.099216 * B;
+  const b2 = -0.003882 * R - 0.048116 * G + 1.051998 * B;
+  return toLstar(Math.max(0, 0.2126 * r2 + 0.7152 * g2 + 0.0722 * b2));
+}
+
+/** The lightness the ramps are evened on: the mean of normal and protan sight. */
+const seenLightness = (c: [number, number, number]) => 0.5 * (lightness(c) + protanLightness(c));
+
+/**
+ * The stops resampled so lightness (normal and protan sight averaged) rises in a straight line from the
+ * ramp's first stop to its last. The stock ramps are close to even in CIE L*, but their red and orange
+ * middles are dark to a protan, so Inferno, Magma, Solar and Fire read as staying dark to two thirds
+ * where Viridis is bright by its middle. Evened out, a slider position is about the same brightness on
+ * every ramp for everyone; the ramps differ in hue. Same number of stops out as in.
+ */
+export function evenLightness(stops: readonly string[]): string[] {
+  const rgb = stops.map(hexToRgb);
+  const n = rgb.length;
+  // the ramp's lightness along its stops, made monotone so it can be inverted
+  const L = rgb.map(seenLightness);
+  for (let i = 1; i < n; i++) L[i] = Math.max(L[i]!, L[i - 1]! + 1e-6);
+  const out: string[] = [];
+  for (let k = 0; k < n; k++) {
+    const target = L[0]! + ((L[n - 1]! - L[0]!) * k) / (n - 1);
+    let i = 0;
+    while (i < n - 2 && L[i + 1]! < target) i++;
+    const f = (target - L[i]!) / (L[i + 1]! - L[i]!);
+    const a = rgb[i]!;
+    const b = rgb[i + 1]!;
+    out.push(rgbToHex([a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f]));
+  }
+  return out;
+}
+
+export type GroundRamp = "viridis" | "inferno" | "magma" | "solar" | "fire";
+export const GROUND_RAMPS: { id: GroundRamp; label: string; stops: readonly string[] }[] = [
+  { id: "viridis", label: "Viridis", stops: evenLightness(VIRIDIS_STOPS) },
+  { id: "inferno", label: "Inferno", stops: evenLightness(INFERNO_STOPS) },
+  { id: "magma", label: "Magma", stops: evenLightness(MAGMA_STOPS) },
+  { id: "solar", label: "Solar", stops: evenLightness(SOLAR_STOPS) },
+  { id: "fire", label: "Fire", stops: evenLightness(FIRE_STOPS) },
+];
+export const rampStops = (id: GroundRamp): readonly string[] => GROUND_RAMPS.find((r) => r.id === id)!.stops;
 
 /** The stops interpolated into a 256 x 1 RGBA stripe. */
 export function rampStripe(stops: readonly string[] = VIRIDIS_STOPS): Uint8Array {

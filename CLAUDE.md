@@ -32,6 +32,22 @@ weights; static site.
 Order of work: Python first (the model, checked by looking at its land cover
 maps), then the TypeScript map.
 
+## Status (2026-10-29, after the calibration check)
+
+- Opens on August 3 to 10, 2026 (8 days), the single run on August 10 12Z.
+- Tooltip reads the head's logit in real units (`web/src/aef/calibration.ts`: the offset from
+  `models/ignition_calibration.json`, times the class's observed/expected ratio): "about 0.02 per
+  1000 km2 per day, 2.2x the CONUS mean". The picture (ramp, gate) does not use the calibration.
+- Burn side done (`ignition/burn_head.py`, `docs/burn-duration.md`, `models/burn_duration.json`): the
+  embedding beats the NLCD class on duration and size (log size R2 0.28 vs 0.13; 100-acre AUC 0.81 vs 0.72).
+  The hold hours in `fuel.ts` are now the class medians of hours from discovery to out (timber, shrub,
+  grass 90 to 96 h capped at 96; pasture and crops 45; built 3 to 51; water 0; HOLD_SCALE 2), so with the
+  24 h lookback the wildland ground keeps the day's peak through the day.
+- Ramps evened on lightness (`ramp.ts` evenLightness: mean of normal and protan L*, linear from each
+  ramp's first stop to its last) so one slider position is the same brightness on every ramp.
+- Nothing is written to disk for HRRR anymore: `hrrr/shard-disk.ts` is gone; the run mode holds its
+  shards in memory like the week.
+
 ## Status (2026-10-28, streaming week)
 
 - The map plays a WEEK by default (`web/src/hrrr/week.ts`): one 12Z HRRR run per day, its first 24 hours,
@@ -43,7 +59,7 @@ maps), then the TypeScript map.
   Chromium processes): a region (Oklahoma, zoom 6.8) all 7 days in 30 s, 2.1 GB; country-wide first days in
   12 s, all in 97 s, 2.7 GB peak 2.95 (was 6.9 GB). The app's floor before any week is about 2 GB (the
   coarse reader's workers hold up to 256 MB of class planes each). The 48 h single run is the other time
-  mode; it still writes its 24 shards to disk (550 MB per run looked at). Nothing is precomputed but the
+  mode (its shards stayed in memory only from 2026-10-29). Nothing is precomputed but the
   model weights; the season mode and its baked shards are gone.
 - Memory probes: `.claude/memory/mem2.py <url> <seconds>` (RSS per Chromium process, heap, the week's
   queue), `.claude/memory/probe_week.py` (days in hand, tiles, tooltip, screenshot).

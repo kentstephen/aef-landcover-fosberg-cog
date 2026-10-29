@@ -251,7 +251,7 @@ export class WeekWeather {
     this.bump();
     const day = this.days[j.d]!;
     try {
-      await day.sc.ensure(Int16Array.of(j.x), Int16Array.of(j.y), day.initIdx, this.windMode, 1, false);
+      await day.sc.ensure(Int16Array.of(j.x), Int16Array.of(j.y), day.initIdx, this.windMode, 1);
     } catch {
       // the side channel logs; the job is dropped (a retry comes with the next ensure of a new instance)
     } finally {

@@ -12,6 +12,7 @@ import type { MapRef } from "react-map-gl/maplibre";
 import { Map as MaplibreMap } from "react-map-gl/maplibre";
 import type * as zarr from "zarrita";
 import { fuelOf } from "./aef/fuel.js";
+import { ignitionRate, rateLabel } from "./aef/calibration.js";
 // import { fireLayers, firesInRun, loadFires, type Fires } from "./fires.js";
 // the burn perimeters (perimeters.ts): not drawn for now; TODO draw them from GeoArrow (deck.gl-geoarrow) rather
 // than a 7 MB GeoJSON parsed on the main thread, and only while each fire burned
@@ -50,18 +51,17 @@ const INITIAL_FRAME_MS = 100;
  * outbreak, extreme wind and single-digit humidity from Texas into the Mid-South.)
  */
 const START_VIEW = { longitude: -97, latitude: 38, zoom: 4.6 };
-const START_INIT = new Date("2026-08-01T12:00:00Z");
+const START_INIT = new Date("2026-08-10T12:00:00Z");
 const START_LEAD = 0;
 /**
- * The week the map opens on, over the whole country: July 26 to August 1, 2026. Ranked from the HRRR analysis
- * (ignition/rank_weeks.py, the head's weather term over a sample of the country), the seven days with the most
- * area-hours above the gate of the year: the interior West hot and dry every afternoon, ending on the day of
- * Washington's first Particularly Dangerous Situation red flag warning. The ground is the 2025 embeddings.
- * (Other weeks: August 17 to 23, the year's single widest day on the 20th; April 19 to 25, the High Plains
- * wind days of the 21st and 22nd; February 15 to 21, the Ranger Road day on the 17th.)
+ * The week the map opens on, over the whole country: August 3 to 10, 2026, eight days in the heart of the
+ * interior West's season, hot and dry every afternoon. The ground is the 2025 embeddings. (By the HRRR
+ * analysis, ignition/rank_weeks.py, the head's weather term over a sample of the country: July 26 to
+ * August 1 had the most area-hours above the gate; August 20 was the single widest day; April 21 and 22
+ * were the High Plains wind days; February 17 the Ranger Road day.)
  */
-const START_WEEK = new Date("2026-07-26T00:00:00Z");
-const START_DAYS = 7;
+const START_WEEK = new Date("2026-08-03T00:00:00Z");
+const START_DAYS = 8;
 /** Terrain under the ground: AWS Terrain Tiles (Mapzen Terrarium), public, 256 px, to zoom 15. */
 const DEM_TILES = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 const HILLSHADE_ID = "aef-hillshade";
@@ -423,7 +423,9 @@ export default function App() {
     const wx0 = wl;
     const ignP = ground && Number.isFinite(wl) ? 1 / (1 + Math.exp(-(ground.ign + wl))) : NaN;
     const groundP = ground ? 1 / (1 + Math.exp(-ground.ign)) : NaN;
-    return { wx, ffwi, ground, className, weight, lit: Number.isFinite(ffwi) ? ffwi * weight : NaN, ignP, groundP, wx0 };
+    // the calibrated reading: the head's logit as ignitions per area and time (calibration.ts)
+    const rate = ground && Number.isFinite(wl) ? ignitionRate(ground.ign + wl, teacher, ci) : NaN;
+    return { wx, ffwi, ground, className, weight, lit: Number.isFinite(ffwi) ? ffwi * weight : NaN, ignP, groundP, wx0, rate };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hover, leadTimeIdx, hourIdx, timeMode, week, cacheVersion, weekVersion, aefLayers, aefVersion, teacher]);
 
@@ -726,6 +728,9 @@ export default function App() {
               : "no embedding here"}
           </div>
           <div style={{ color: "#bbb" }}>
+            {Number.isFinite(hoverInfo.rate) ? `about ${rateLabel(hoverInfo.rate)}` : ""}
+          </div>
+          <div>
             {hoverInfo.className ? `reads as ${hoverInfo.className}` : ""}
             {hoverInfo.ground ? ` · canopy ${Math.round(hoverInfo.ground.cover * 100)}%` : ""}
           </div>
