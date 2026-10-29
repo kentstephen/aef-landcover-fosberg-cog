@@ -2,7 +2,8 @@
 // import { COLORMAP_INDEX } from "@developmentseed/deck.gl-raster/gpu-modules";
 // import colormapsPngUrl from "@developmentseed/deck.gl-raster/gpu-modules/colormaps.png";
 import { useState } from "react";
-import type { Teacher } from "../aef/head.js";
+import { HEADS, type Teacher } from "../aef/head.js";
+import { HOLD } from "../aef/fuel.js";
 import { MOSAIC_MIN_ZOOM } from "../aef/mosaic.js";
 import { AEF_YEAR } from "../aef/mosaic.js";
 import { GROUND_RAMPS, rampGradient, rampStops, type GroundRamp } from "../aef/ramp.js";
@@ -392,11 +393,14 @@ export function ControlPanel(p: ControlPanelProps) {
         <Field
           label={
             <span className="row">
-              <span>{p.glowHours === 0 ? "Afterglow: off (this hour only)" : `Afterglow: the brightest of the last ${p.glowHours} h${p.fuel === "ignition" ? "" : ", fading by fuel"}`}</span>
+              <span>{p.glowHours === 0 ? "Afterglow: off (this hour only)" : `Afterglow: looks back ${p.glowHours} h, the ground holding by land cover`}</span>
               <Help label="Afterglow">
-                Each pixel shows the brightest hour behind it, faded by exp(-age / hold), with a hold per land cover: grass,
-                pasture and shrub let a windy hour go in about 3 to 6 h, timber holds it about a day, built ground and water hold
-                nothing. So the ground carries what the window has done to it, and timber stays lit after the grass goes dark.
+                The ignition head says when a fire could start; a fire that started keeps burning. So the ground holds the
+                strongest recent hour by what it is: the weather term fades 3 logits over the land cover's hold, grass and
+                crops in a few hours, timber through the night, built ground and water not at all. The gray weather field
+                keeps the weather's own memory, 0.3 logit an hour, so the current moves on while the ground remembers it.
+                Hold hours ({p.teacher === "nlcd" ? "NLCD" : "Esri"}):{" "}
+                {HEADS[p.teacher].classes.map((code, i) => `${HEADS[p.teacher].names[i]} ${HOLD[p.teacher][code] ?? 0}`).join(", ")}.
               </Help>
             </span>
           }
