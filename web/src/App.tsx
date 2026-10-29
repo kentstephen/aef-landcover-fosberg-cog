@@ -552,7 +552,7 @@ export default function App() {
       rows.push({ id: f.id, name: f.properties.name, state: f.properties.state, share: sh, rate, starts: (rate * f.properties.km2) / 1000, bbox: b });
     });
     rows.sort((a, b) => b.share - a.share);
-    return rows.slice(0, 15);
+    return rows;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fuel, countyTable, counties, view, timeIdx, zHideCounty, wxGate, weatherSrc, cacheVersion, weekVersion, countyVersion]);
   const countyInfo = useMemo(() => {

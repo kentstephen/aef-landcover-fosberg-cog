@@ -324,6 +324,7 @@ export function ControlPanel(p: ControlPanelProps) {
               {p.countyProgress ? ` Ground summed for ${p.countyProgress[0]} of ${p.countyProgress[1]} files.` : ""}
             </p>
             {p.countyRows.length > 0 ? (
+              <div className="rank-box">
               <table className="rank">
                 <thead>
                   <tr>
@@ -344,6 +345,7 @@ export function ControlPanel(p: ControlPanelProps) {
                   ))}
                 </tbody>
               </table>
+              </div>
             ) : (
               <p className="muted small">No county in view has its ground and weather yet.</p>
             )}
