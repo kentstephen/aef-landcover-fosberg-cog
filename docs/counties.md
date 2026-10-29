@@ -20,8 +20,8 @@ thread.
   the county's land area / 1000.
 - The weather under the counties in view is asked for through the same side channel as the tiles (one HRRR
   pixel per shard a county touches), so a county's number appears when its shards land, like the pixels.
-- Drawn as a deck.gl GeoJsonLayer with the ground's ramp and scale (probability or logit), a thin pale
-  outline, no casing; the fill fades in over the first tenth of the ramp. Between hours the odds interpolate
+- Drawn as a deck.gl GeoJsonLayer with the ground's ramp and scale (probability or logit), no outlines;
+  the fill fades in over the first tenth of the ramp. Between hours the odds interpolate
   with the play fraction. Hover: county, rate, multiple of the CONUS mean, starts expected today. The table
   ranks the counties in view by rate; click a row to fly to the county.
 
