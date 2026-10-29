@@ -323,32 +323,32 @@ export function ControlPanel(p: ControlPanelProps) {
               the county's land.
               {p.countyProgress ? ` Ground summed for ${p.countyProgress[0]} of ${p.countyProgress[1]} files.` : ""}
             </p>
-            {p.countyRows.length > 0 ? (
-              <div className="rank-box">
-              <table className="rank">
-                <thead>
-                  <tr>
-                    <th>county in view</th>
-                    <th>ground at risk</th>
-                    <th>starts today</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {p.countyRows.map((r) => (
-                    <tr key={r.id} onClick={() => p.onCountyPick(r.bbox)}>
-                      <td>
-                        {r.name}, {r.state}
-                      </td>
-                      <td>{Math.round(r.share * 100)}%</td>
-                      <td>{r.starts.toFixed(2)}</td>
+            <div className="rank-box">
+              {p.countyRows.length > 0 ? (
+                <table className="rank">
+                  <thead>
+                    <tr>
+                      <th>county in view</th>
+                      <th>ground at risk</th>
+                      <th>starts today</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-              </div>
-            ) : (
-              <p className="muted small">No county in view has its ground and weather yet.</p>
-            )}
+                  </thead>
+                  <tbody>
+                    {p.countyRows.map((r) => (
+                      <tr key={r.id} onClick={() => p.onCountyPick(r.bbox)}>
+                        <td>
+                          {r.name}, {r.state}
+                        </td>
+                        <td>{Math.round(r.share * 100)}%</td>
+                        <td>{r.starts.toFixed(2)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : (
+                <p className="muted small rank-empty">No county in view has its ground and weather yet.</p>
+              )}
+            </div>
           </div>
         ) : null}
         {p.fuel === "ignition" || p.fuel === "counties" ? (

@@ -141,12 +141,13 @@
 .day.on { outline: 2px solid var(--warm); outline-offset: -1px; }
 @keyframes day-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 
-/* the counties' ranked table: its own scroll box of a fixed height, so a long list never pushes the
-   rest of the card down and scrolls on its own; the header stays put while the rows go by */
-.pn .rank-box { max-height: 38vh; overflow-y: auto; overscroll-behavior: contain; margin: 6px 0 8px; border: 1px solid var(--line); border-radius: 6px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
+/* the counties' ranked table: a box of one fixed height whether it holds no county, one or fifty, so the
+   card never moves as the view or the sliders change; the rows scroll inside it, the header stays put */
+.pn .rank-box { height: 260px; overflow-y: auto; overscroll-behavior: contain; margin: 6px 0 8px; border: 1px solid var(--line); border-radius: 6px; scrollbar-width: thin; scrollbar-color: var(--line) transparent; }
 .pn .rank { width: 100%; border-collapse: collapse; margin: 0; font-size: 12px; font-variant-numeric: tabular-nums; }
 .pn .rank th { position: sticky; top: 0; z-index: 1; background: #22252a; text-align: left; font-weight: 500; color: var(--muted); padding: 3px 4px; border-bottom: 1px solid rgba(255, 255, 255, 0.12); }
 .pn .rank tr:last-child td { border-bottom: 0; }
+.pn .rank-empty { padding: 6px 8px; }
 .pn .rank td { padding: 2px 4px; border-bottom: 1px solid rgba(255, 255, 255, 0.06); cursor: pointer; }
 .pn .rank th:not(:first-child), .pn .rank td:not(:first-child) { text-align: right; white-space: nowrap; }
 .pn .rank tr:hover td { background: rgba(255, 255, 255, 0.06); }
