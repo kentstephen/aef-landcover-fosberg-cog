@@ -73,6 +73,18 @@ export type WeatherTex = {
   nodes: Float32Array;
 };
 
+/** Catmull-Rom weights for the four samples around a fraction t (at -1, 0, 1, 2). */
+function catmull(t: number, w: Float32Array): void {
+  const t2 = t * t;
+  const t3 = t2 * t;
+  w[0] = 0.5 * (-t3 + 2 * t2 - t);
+  w[1] = 0.5 * (3 * t3 - 5 * t2 + 2);
+  w[2] = 0.5 * (-3 * t3 + 4 * t2 + t);
+  w[3] = 0.5 * (t3 - t2);
+}
+const wx4 = new Float32Array(4);
+const wy4 = new Float32Array(4);
+
 export function weatherTexture(device: Device, g: WeatherGrid, src: WeatherSource): WeatherTex {
   const per = g.cols * g.rows;
   const depth = src.depth;
@@ -90,7 +102,9 @@ export function weatherTexture(device: Device, g: WeatherGrid, src: WeatherSourc
       for (let l = 0; l < depth; l++) data[l * per + k] = nan;
       continue;
     }
-    // the four pixel centers around the node, weighted by distance; a missing pixel drops out
+    // the 4 x 4 pixel centers around the node with Catmull-Rom weights (a smooth surface through the pixel
+    // values, so a threshold on it draws a rounded line, not the diamond corners of a bilinear one); where one
+    // of the 16 is outside the grid, the four nearest weighted by distance; a missing hour drops out
     const cx = x - 0.5;
     const cy = y - 0.5;
     const x0 = Math.floor(cx);
@@ -99,25 +113,45 @@ export function weatherTexture(device: Device, g: WeatherGrid, src: WeatherSourc
     const ty = cy - y0;
     acc.fill(0);
     wsum.fill(0);
-    for (let dy = 0; dy < 2; dy++) {
-      for (let dx = 0; dx < 2; dx++) {
-        const w = (dx ? tx : 1 - tx) * (dy ? ty : 1 - ty);
-        if (w <= 0) continue;
-        const xx = x0 + dx;
-        const yy = y0 + dy;
-        if (!src.inGrid(xx, yy)) continue;
-        src.series(xx, yy, s);
-        for (let l = 0; l < depth; l++) {
-          const v = s[l]!;
-          if (v === v) {
-            acc[l] = acc[l]! + w * v;
-            wsum[l] = wsum[l]! + w;
+    let cubic = true;
+    for (let dy = -1; dy <= 2 && cubic; dy++) for (let dx = -1; dx <= 2; dx++) if (!src.inGrid(x0 + dx, y0 + dy)) { cubic = false; break; }
+    if (cubic) {
+      catmull(tx, wx4);
+      catmull(ty, wy4);
+      for (let dy = -1; dy <= 2; dy++) {
+        for (let dx = -1; dx <= 2; dx++) {
+          const w = wx4[dx + 1]! * wy4[dy + 1]!;
+          src.series(x0 + dx, y0 + dy, s);
+          for (let l = 0; l < depth; l++) {
+            const v = s[l]!;
+            if (v === v) {
+              acc[l] = acc[l]! + w * v;
+              wsum[l] = wsum[l]! + w;
+            }
+          }
+        }
+      }
+    } else {
+      for (let dy = 0; dy < 2; dy++) {
+        for (let dx = 0; dx < 2; dx++) {
+          const w = (dx ? tx : 1 - tx) * (dy ? ty : 1 - ty);
+          if (w <= 0) continue;
+          const xx = x0 + dx;
+          const yy = y0 + dy;
+          if (!src.inGrid(xx, yy)) continue;
+          src.series(xx, yy, s);
+          for (let l = 0; l < depth; l++) {
+            const v = s[l]!;
+            if (v === v) {
+              acc[l] = acc[l]! + w * v;
+              wsum[l] = wsum[l]! + w;
+            }
           }
         }
       }
     }
     for (let l = 0; l < depth; l++) {
-      if (wsum[l]! > 0) {
+      if (wsum[l]! > 1e-6) {
         const v = acc[l]! / wsum[l]!;
         data[l * per + k] = toHalf(v);
         nodes[l * per + k] = v;

@@ -183,8 +183,13 @@ export default function App() {
   const [leadTimeIdx, setLeadTimeIdx] = useState(START_LEAD);
   const [isPlaying, setIsPlaying] = useState(true);
   const [frameDurationMs, setFrameDurationMs] = useState(INITIAL_FRAME_MS);
+  /** How far into the hour the playhead is, 0..1 in 24 steps, so the ground glides between hours while playing. */
+  const [hourFrac, setHourFrac] = useState(0);
   useEffect(() => {
-    if (!isPlaying) return;
+    if (!isPlaying) {
+      setHourFrac(0);
+      return;
+    }
     let raf = 0;
     let last = performance.now();
     const loop = (now: number) => {
@@ -193,6 +198,7 @@ export default function App() {
         else setLeadTimeIdx((i) => (i + 1) % HRRR_LEAD_TIME_COUNT);
         last = now;
       }
+      setHourFrac(Math.min(23, Math.floor(((now - last) / frameDurationMs) * 24)) / 24);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -497,7 +503,7 @@ export default function App() {
           mode: fuel === "cover" ? "cover" : fuel === "ignition" ? "ignition" : "lit",
           zoom,
           teacher,
-          leadTimeIdx: timeIdx,
+          leadTimeIdx: timeIdx + hourFrac,
           weather: weatherSrc,
           weatherKey,
           hideBelow,
@@ -546,7 +552,7 @@ export default function App() {
     showRaster, source, getTileData, colormapTexture, initTimeIdx, windMode, rasterVariable, selection, renderTile, rasterOpacity,
     leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity, groundRamp, zoom,
     glowHours, grain, light, contourLines, pHide, pMax, ignScale, zLo, zHi, rankRamp, useWeather, standingAlpha, wxGate, fieldAlpha,
-    timeIdx, weatherSrc, weatherKey, timeMode,
+    timeIdx, hourFrac, weatherSrc, weatherKey, timeMode,
   ]);
 
   const status: Status = {

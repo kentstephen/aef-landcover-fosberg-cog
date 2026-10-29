@@ -90,6 +90,22 @@ uniform sampler2DArray ffwiTex;
 uniform sampler2D lutTex;
 uniform sampler2D rampTex;
 
+/**
+ * The weather at a fractional hour: the two hours around it mixed by the fraction, so the field glides between
+ * the forecast's hours while playing instead of jumping on the hour. A missing hour yields to the other one.
+ */
+float wxAt(vec2 uv, float l) {
+  float l0 = floor(l);
+  float f = l - l0;
+  float depth = float(textureSize(ffwiTex, 0).z);
+  float a = texture(ffwiTex, vec3(uv, l0)).r;
+  if (f <= 0.0 || l0 + 1.0 >= depth) return a;
+  float b = texture(ffwiTex, vec3(uv, l0 + 1.0)).r;
+  if (isnan(a)) return b;
+  if (isnan(b)) return a;
+  return mix(a, b, f);
+}
+
 float fuelHash(vec2 p) {
   vec3 p3 = fract(vec3(p.xyx) * 0.1031);
   p3 += dot(p3, p3.yzx + 33.33);
@@ -116,14 +132,14 @@ float fuelHash(vec2 p) {
         float wxG = -99.0;
         float hold = hasGround ? texelFetch(lutTex, ivec2(int(ci + 0.5), 1), 0).r * 255.0 / ${HOLD_SCALE}.0 : 0.0;
         if (${MODULE_NAME}.useWeather > 0.5) {
-          float wl = texture(ffwiTex, vec3(geometry.uv, ${MODULE_NAME}.layerIndex)).r;
+          float wl = wxAt(geometry.uv, ${MODULE_NAME}.layerIndex);
           if (!isnan(wl)) { wx = wl; wxG = wl; }
           int back = int(min(${MODULE_NAME}.glowHours, 48.0));
           for (int k = 1; k <= 48; k++) {
             if (k > back) break;
             float l = ${MODULE_NAME}.layerIndex - float(k);
             if (l < 0.0) break;
-            float wk = texture(ffwiTex, vec3(geometry.uv, l)).r;
+            float wk = wxAt(geometry.uv, l);
             if (isnan(wk)) continue;
             wx = max(wx, wk - 0.3 * float(k));
             if (hold > 0.0) wxG = max(wxG, wk - max(wk - (${MODULE_NAME}.wxGate - 0.5), 0.0) * min(float(k) / hold, 1.0));
@@ -177,7 +193,7 @@ float fuelHash(vec2 p) {
       } else if (${MODULE_NAME}.mode > 0.5) {
         color = vec4(lut.rgb, 1.0);
       } else {
-        float f = texture(ffwiTex, vec3(geometry.uv, ${MODULE_NAME}.layerIndex)).r;
+        float f = wxAt(geometry.uv, ${MODULE_NAME}.layerIndex);
         float v = isnan(f) ? -1.0 : f * lut.a;
         float hold = texelFetch(lutTex, ivec2(int(ci + 0.5), 1), 0).r * 255.0 / ${HOLD_SCALE}.0;
         int back = int(min(${MODULE_NAME}.glowHours, 48.0));
@@ -186,7 +202,7 @@ float fuelHash(vec2 p) {
             if (k > back) break;
             float l = ${MODULE_NAME}.layerIndex - float(k);
             if (l < 0.0) break;
-            float g = texture(ffwiTex, vec3(geometry.uv, l)).r;
+            float g = wxAt(geometry.uv, l);
             if (isnan(g)) continue;
             v = max(v, g * lut.a * exp(-float(k) / hold));
           }
