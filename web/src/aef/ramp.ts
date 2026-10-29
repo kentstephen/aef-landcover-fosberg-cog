@@ -36,11 +36,21 @@ export const SOLAR_STOPS = [
   "#ddd236", "#deda39", "#dfe13d", "#dfe740", "#e0f044", "#e0f647", "#e1fd4b", "#e7fe6b", "#eefe8b", "#f5ffab",
 ];
 
-export type GroundRamp = "viridis" | "inferno" | "solar";
+/** Fire (colorcet, linear_kryw_0_100_c71) from 10 percent up: deep red, orange, yellow, white. Its top is white already. */
+export const FIRE_STOPS = [
+  "#400000", "#480100", "#4f0100", "#550100", "#5d0100", "#650100", "#6b0200", "#740200", "#7c0200", "#830200",
+  "#8b0300", "#930300", "#9c0400", "#a30400", "#ac0500", "#b40600", "#bc0700", "#c50800", "#ce0900", "#d50b00",
+  "#de0d00", "#e71000", "#ef1700", "#f42000", "#f82f00", "#fb3e00", "#fd4900", "#fe5600", "#fe6200", "#ff6b00",
+  "#ff7600", "#ff8000", "#ff8a00", "#ff9100", "#ff9a00", "#ffa301", "#ffaa01", "#ffb202", "#ffbb03", "#ffc104",
+  "#ffc905", "#ffd107", "#ffd909", "#ffdf0b", "#ffe70f", "#ffef17", "#fff52b", "#fffb62", "#fffebb", "#ffffff",
+];
+
+export type GroundRamp = "viridis" | "inferno" | "solar" | "fire";
 export const GROUND_RAMPS: { id: GroundRamp; label: string; stops: readonly string[] }[] = [
   { id: "viridis", label: "Viridis", stops: VIRIDIS_STOPS },
   { id: "inferno", label: "Inferno", stops: INFERNO_STOPS },
   { id: "solar", label: "Solar", stops: SOLAR_STOPS },
+  { id: "fire", label: "Fire", stops: FIRE_STOPS },
 ];
 export const rampStops = (id: GroundRamp): readonly string[] => GROUND_RAMPS.find((r) => r.id === id)!.stops;
 
