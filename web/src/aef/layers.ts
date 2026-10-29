@@ -4,7 +4,7 @@ import { AffineTileset, AffineTilesetLevel, type GetTileDataOptions, RasterTileL
 import { ZarrLayer, type GetTileDataOptions as ZarrTileOptions } from "@developmentseed/deck.gl-zarr";
 import type { Device, Texture } from "@luma.gl/core";
 import type * as zarr from "zarrita";
-import type { FfwiTileCache } from "../hrrr/tile-cache.js";
+import { FfwiTileCache } from "../hrrr/tile-cache.js";
 import type { CoarsePool } from "./coarse.js";
 import { lutTexture } from "./fuel.js";
 import { type Classified, type Teacher } from "./head.js";
@@ -37,6 +37,8 @@ export type AefTile = {
   /** The ignition ground logit plane. */
   groundTex: Texture;
   grid: WeatherGrid;
+  /** The HRRR shards under the grid, made on first use. */
+  shardKeys?: Set<string>;
   /** Per node and layer: the FFWI, or in ignition mode the weather part of the ignition logit. */
   ffwiTex: Texture;
   /** Which source and kind the weather texture was built from. */
@@ -113,6 +115,17 @@ function coarseTileset(): AffineTileset {
   return coarseTilesetCache;
 }
 
+/** Whether any node of the tile's weather grid lies in one of these HRRR shards (keys as FfwiTileCache.keyFor). */
+function touches(t: AefTile, shards: Set<string>): boolean {
+  if (!t.shardKeys) {
+    t.shardKeys = new Set();
+    const g = t.grid;
+    for (let i = 0; i < g.px.length; i++) if (g.px[i]! >= 0) t.shardKeys.add(FfwiTileCache.keyFor(g.px[i]!, g.py[i]!));
+  }
+  for (const k of t.shardKeys) if (shards.has(k)) return true;
+  return false;
+}
+
 export class AefLayers {
   readonly live = new Map<string, AefTile>();
   /** Tiles asked and not back yet, and how many have come back. */
@@ -153,11 +166,13 @@ export class AefLayers {
    * for the tiles it concerns. A tile whose nodes all had weather, at this lag and source, keeps its texture:
    * a shard arriving elsewhere does not touch it, so the main thread is not held for every tile on every shard.
    */
-  refreshWeather() {
+  refreshWeather(shards?: Set<string>) {
     if (!this.device) return;
     let changed = 0;
     for (const t of this.live.values()) {
       if (t.weatherComplete && t.weatherTau === this.cache.tau && t.weatherKey === this.weatherKey) continue;
+      // only the shards named arrived: a tile over none of them keeps its texture
+      if (shards && t.weatherKey === this.weatherKey && !touches(t, shards)) continue;
       const old = t.ffwiTex;
       const w = weatherTexture(this.device, t.grid, this.source);
       t.ffwiTex = w.tex;

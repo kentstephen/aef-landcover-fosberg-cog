@@ -163,9 +163,12 @@ export default function App() {
       (px, py) => needWeatherRef.current(px, py),
       () => setAefVersion((v) => v + 1),
     );
-    aefLayersRef.current = l;
     return l;
   }, [aefIndex, mosaic]);
+  // StrictMode runs the memo twice in development and keeps the first result: the ref follows the kept one
+  useEffect(() => {
+    aefLayersRef.current = aefLayers;
+  }, [aefLayers]);
 
   // ---- animation
   const timeModeRef = useRef<TimeMode>("week");
@@ -359,10 +362,17 @@ export default function App() {
       sc.abort();
     };
   }, [source, timeMode, initTimeIdx, windMode, aefLayers]);
-  // The weather changed: every tile's weather texture anew.
+  // The weather changed: the weather texture anew for the tiles it touches (a run shard: every tile).
   useEffect(() => {
     aefLayers?.refreshWeather();
-  }, [aefLayers, cacheVersion, weekVersion]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aefLayers, cacheVersion]);
+  useEffect(() => {
+    if (!week || !aefLayers) return;
+    const keys = week.takeArrived();
+    if (keys.size > 0) aefLayers.refreshWeather(keys);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [aefLayers, week, weekVersion]);
   /** The layer of the weather texture on screen: the lead hour of the run or the hour of the week. */
   const timeIdx = timeMode === "week" ? hourIdx : leadTimeIdx;
   const timeDepth = timeMode === "week" ? weekDays * HOURS_PER_DAY : HRRR_LEAD_TIME_COUNT;

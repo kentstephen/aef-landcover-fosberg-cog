@@ -58,8 +58,6 @@ type Job = { d: number; key: string; x: number; y: number; inView: boolean };
 /** What the panel's day strip shows for each day. */
 export type DayState = "in" | "loading" | "waiting" | "none";
 
-const SHARD_ROWS = Math.ceil(HRRR_GRID.height / HRRR_SHARD.height);
-const SHARD_COLS = Math.ceil(HRRR_GRID.width / HRRR_SHARD.width);
 /** Shards decoding at once over the whole week (each is about 18 MB over the wire and 80 MB while decoding). */
 const IN_FLIGHT = 4;
 
@@ -71,8 +69,11 @@ export class WeekWeather {
   readonly depth: number;
   private days: Day[] = [];
   private shards = new Map<string, WeekShard>();
+  /** Bumped when anything changed (a shard arrived, a job started, the view moved): the panel re-renders. */
   version = 0;
   listeners = new Set<() => void>();
+  /** Shards (by key) whose planes arrived since the last `takeArrived`: the tiles over them need new textures. */
+  private arrived = new Set<string>();
   private gone = false;
   /** Every shard-day of the week, keyed `${d}|${shard}`; done jobs leave the map. */
   private jobs = new Map<string, Job>();
@@ -84,22 +85,34 @@ export class WeekWeather {
 
   constructor(arrays: HrrrArrays, readonly spec: WeekSpec, private windMode: WindMode, initTimeCount: number) {
     this.depth = spec.days * HOURS_PER_DAY;
+    // debug hook for the headless probes
+    (globalThis as unknown as { __week?: unknown }).__week = this;
     for (let d = 0; d < spec.days; d++) {
       const cache = new FfwiTileCache();
       const day: Day = { initIdx: weekInitIdx(spec, d, initTimeCount), cache, sc: new SideChannel(arrays, cache), done: new Set() };
       cache.listeners.add(() => this.compact(d));
       this.days.push(day);
-      if (day.initIdx < 0) continue;
-      // the whole country for every day, at the back of the queue: the view's shards go first, the rest
-      // follows so panning is warm (a week over the country is about 3 GB over the wire the first time,
-      // 640 MB of byte planes in memory)
-      for (let r = 0; r < SHARD_ROWS; r++) {
-        for (let c = 0; c < SHARD_COLS; c++) {
-          const key = `${r},${c}`;
-          this.jobs.set(`${d}|${key}`, { d, key, x: c * HRRR_SHARD.width, y: r * HRRR_SHARD.height, inView: false });
-        }
-      }
     }
+  }
+
+  /** The shards whose planes arrived since the last call (then cleared). */
+  takeArrived(): Set<string> {
+    const a = this.arrived;
+    this.arrived = new Set();
+    return a;
+  }
+
+  /** The job for shard `key` on day d, made on first ask. Only shards the view asked for are ever fetched. */
+  private job(d: number, key: string): Job | undefined {
+    if (this.days[d]!.initIdx < 0 || this.days[d]!.done.has(key)) return undefined;
+    const id = `${d}|${key}`;
+    let j = this.jobs.get(id);
+    if (!j) {
+      const [r, c] = key.split(",").map(Number) as [number, number];
+      j = { d, key, x: c * HRRR_SHARD.width, y: r * HRRR_SHARD.height, inView: true };
+      this.jobs.set(id, j);
+    }
+    return j;
   }
 
   /** Shard-days under the view: in hand, and asked for (the loading bar). */
@@ -120,6 +133,7 @@ export class WeekWeather {
   dayStates(): DayState[] {
     return this.days.map((day, d) => {
       if (day.initIdx < 0) return "none";
+      if (this.viewKeys.size === 0) return "waiting";
       let missing = 0;
       let loading = false;
       for (const key of this.viewKeys) {
@@ -183,6 +197,7 @@ export class WeekWeather {
     if (same) return;
     this.viewKeys = keys;
     for (const j of this.jobs.values()) j.inView = keys.has(j.key);
+    for (const key of keys) for (let d = 0; d < this.days.length; d++) this.job(d, key);
     this.bump();
     this.pump();
   }
@@ -197,7 +212,7 @@ export class WeekWeather {
       this.viewKeys.add(key);
       added = true;
       for (let d = 0; d < this.days.length; d++) {
-        const j = this.jobs.get(`${d}|${key}`);
+        const j = this.job(d, key);
         if (j) j.inView = true;
       }
     }
@@ -205,7 +220,7 @@ export class WeekWeather {
     this.pump();
   }
 
-  /** The view's shards first, the playhead's day first among them, then the days after it in order. */
+  /** The view's shards first (a shard the view left waits), the playhead's day first, then the days after it. */
   private rank(j: Job): number {
     const n = this.days.length;
     return (j.inView ? 0 : 1000) + ((j.d - this.focusDay + n) % n);
@@ -225,7 +240,7 @@ export class WeekWeather {
           best = j;
         }
       }
-      if (!best) return;
+      if (!best || !best.inView) return;
       void this.run(best);
     }
   }
@@ -236,7 +251,7 @@ export class WeekWeather {
     this.bump();
     const day = this.days[j.d]!;
     try {
-      await day.sc.ensure(Int16Array.of(j.x), Int16Array.of(j.y), day.initIdx, this.windMode, 1);
+      await day.sc.ensure(Int16Array.of(j.x), Int16Array.of(j.y), day.initIdx, this.windMode, 1, false);
     } catch {
       // the side channel logs; the job is dropped (a retry comes with the next ensure of a new instance)
     } finally {
@@ -275,6 +290,7 @@ export class WeekWeather {
       this.shards.set(`${d}|${t.key}`, { term, ffwi, width: t.width, rowStart: t.rowStart, colStart: t.colStart });
       day.done.add(t.key);
       day.cache.delete(t.key);
+      this.arrived.add(t.key);
     }
     this.bump();
   }

@@ -408,10 +408,11 @@ export function ControlPanel(p: ControlPanelProps) {
           />
           <Help label="Time">
             A week: one 12Z HRRR run per day, its first 24 hours each, stitched into one hourly film, fetched as you watch:
-            the day on screen first, then the days after it, then the rest of the country in the background so panning is
-            warm. Play runs over the days in hand and wraps there until the rest arrive; the strip under the slider shows
-            which days are in. About 18 MB per shard per day over the wire (kept on disk after); a week over the whole
-            country is about 3 GB the first time and 640 MB in memory. One run: the 49 hours of a single forecast.
+            only the shards under the view, the day on screen first, then the days after it. Play runs over the days in
+            hand and wraps there until the rest arrive; the strip under the slider shows which days are in. About 18 MB
+            per shard per day over the wire, kept as 4 MB of bytes in memory and not written to disk: a region is 25 to
+            100 MB, the whole country about 3 GB over the wire and 640 MB in memory. One run: the 49 hours of a single
+            forecast.
           </Help>
         </div>
         {p.timeMode === "week" ? (

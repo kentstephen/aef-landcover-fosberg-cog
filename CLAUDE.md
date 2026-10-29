@@ -39,9 +39,15 @@ maps), then the TypeScript map.
   are one queue ranked by the playhead (the view's shards for the day on screen first, then the days after
   it, then the rest of the country in the background), 4 in flight; play runs over the days in hand and
   wraps there until the rest arrive; a strip of day cells under the slider shows in / loading / waiting.
-  Measured cold headless: a region (Oklahoma, zoom 6.8) first day in 3 s, all in 15 s; country-wide first
-  day in 3 s, all in 77 s (was 216 to 284 s with serialized fetches). The 48 h single run is the other time
-  mode. Nothing is precomputed but the model weights; the season mode and its baked shards are gone.
+  Only the shards under the view are fetched; the week writes nothing to disk (the raw shards are 23 MB
+  each; writing a country-wide week put 4 GB in the browser process). Measured cold headless (one tab, all
+  Chromium processes): a region (Oklahoma, zoom 6.8) all 7 days in 30 s, 2.1 GB; country-wide first days in
+  12 s, all in 97 s, 2.7 GB peak 2.95 (was 6.9 GB). The app's floor before any week is about 2 GB (the
+  coarse reader's workers hold up to 256 MB of class planes each). The 48 h single run is the other time
+  mode; it still writes its 24 shards to disk (550 MB per run looked at). Nothing is precomputed but the
+  model weights; the season mode and its baked shards are gone.
+- Memory probes: `.claude/memory/mem2.py <url> <seconds>` (RSS per Chromium process, heap, the week's
+  queue), `.claude/memory/probe_week.py` (days in hand, tiles, tooltip, screenshot).
 - Next: the same app in a marimo notebook with a Python kernel reading the HRRR analysis (virtual store)
   as another source of days; see `.claude/memory/PLAN_runtime_week.md` Phase B.
 - Panel: Ignition / Off; the weather field fold, the land cover modes and grain are commented out.

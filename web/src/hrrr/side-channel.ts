@@ -33,6 +33,8 @@ export class SideChannel {
     initTimeIdx: number,
     windMode: WindMode,
     concurrency = 4,
+    /** Write the decoded shard to the disk cache (23 MB each; the week keeps its own smaller planes instead). */
+    keep = true,
   ): Promise<void> {
     if (!this.ctrl) this.ctrl = new AbortController();
     const signal = this.ctrl.signal;
@@ -56,7 +58,7 @@ export class SideChannel {
         const key = `${job.row},${job.col}`;
         this.inflight.add(key);
         try {
-          await this.fetchShard(job.row, job.col, initTimeIdx, windMode, signal);
+          await this.fetchShard(job.row, job.col, initTimeIdx, windMode, signal, keep);
         } catch (e) {
           if (!signal.aborted) console.warn("side channel shard failed", key, e);
         } finally {
@@ -73,6 +75,7 @@ export class SideChannel {
     initTimeIdx: number,
     windMode: WindMode,
     signal: AbortSignal,
+    keep: boolean,
   ): Promise<void> {
     const rowStart = row * HRRR_SHARD.height;
     const colStart = col * HRRR_SHARD.width;
@@ -111,7 +114,7 @@ export class SideChannel {
       tc,
     );
     const tile: FfwiTile = { key: `${row},${col}`, rowStart, colStart, width, height, mEq, mLag: mEq, wind, rh, tc };
-    shardToDisk(key, tile);
+    if (keep) shardToDisk(key, tile);
     this.cache.set(tile);
   }
 }
