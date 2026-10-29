@@ -44,24 +44,23 @@ const BEFORE_ID = "aeroway-runway";
 /** 100 ms a frame: a week in 17 s. */
 const INITIAL_FRAME_MS = 100;
 /**
- * Opens on the whole country. The single-run mode opens on the 12Z run of April 22, 2026, the second of
- * the two wide red flag days, playing from +0 h so the afternoon peak comes up over the first frames and the
- * afterglow carries it into the 23rd. (March 14, 2025 12Z is another: the Southern Plains
+ * Opens on the whole country. The single-run mode opens on the 12Z run of August 1, 2026, the day of
+ * Washington's first PDS red flag warning, playing from +0 h so the afternoon peak comes up over the first
+ * frames and the afterglow carries it into the 2nd. (March 14, 2025 12Z is another: the Southern Plains
  * outbreak, extreme wind and single-digit humidity from Texas into the Mid-South.)
  */
 const START_VIEW = { longitude: -97, latitude: 38, zoom: 4.6 };
-const START_INIT = new Date("2026-04-22T12:00:00Z");
+const START_INIT = new Date("2026-08-01T12:00:00Z");
 const START_LEAD = 0;
 /**
- * The week the map opens on, over the whole country: April 19 to 25, 2026. On the 21st and 22nd red flag
- * warnings covered 11 to 12 million people across eight states, from east-central New Mexico up the High Plains
- * into South Dakota and across the Intermountain West, with Particularly Dangerous Situation warnings in
- * Nebraska and southern Colorado: the widest fire weather picture of the year. The ground is the 2025
- * embeddings. (Other weeks: February 15 to 21, 2026, the Ranger Road day on the 17th along a thousand-mile
- * corridor from New Mexico to Wyoming; March 10 to 16, 2026, the Morrill Fire in the Nebraska Sandhills;
- * July 29 to August 4, 2026, Washington's first PDS red flag warning on August 1.)
+ * The week the map opens on, over the whole country: July 26 to August 1, 2026. Ranked from the HRRR analysis
+ * (ignition/rank_weeks.py, the head's weather term over a sample of the country), the seven days with the most
+ * area-hours above the gate of the year: the interior West hot and dry every afternoon, ending on the day of
+ * Washington's first Particularly Dangerous Situation red flag warning. The ground is the 2025 embeddings.
+ * (Other weeks: August 17 to 23, the year's single widest day on the 20th; April 19 to 25, the High Plains
+ * wind days of the 21st and 22nd; February 15 to 21, the Ranger Road day on the 17th.)
  */
-const START_WEEK = new Date("2026-04-19T00:00:00Z");
+const START_WEEK = new Date("2026-07-26T00:00:00Z");
 const START_DAYS = 7;
 /** Terrain under the ground: AWS Terrain Tiles (Mapzen Terrarium), public, 256 px, to zoom 15. */
 const DEM_TILES = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
