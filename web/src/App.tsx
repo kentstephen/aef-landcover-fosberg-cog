@@ -200,14 +200,22 @@ export default function App() {
     const onKey = (e: KeyboardEvent) => {
       const space = e.code === "Space" || e.key === " ";
       const full = e.key === "f" || e.key === "F";
-      if (!space && !full) return;
+      const labels = e.key === "l" || e.key === "L";
+      if (!space && !full && !labels) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "BUTTON" || tag === "SELECT" || el?.isContentEditable) return;
       e.preventDefault();
       if (space) setIsPlaying((p) => !p);
-      else if (document.fullscreenElement) void document.exitFullscreen();
+      else if (labels) {
+        // the basemap's text and icons (every symbol layer of the style) on or off
+        const m = mapRef.current?.getMap();
+        if (!m) return;
+        const syms = m.getStyle().layers.filter((l) => l.type === "symbol");
+        const on = syms.some((l) => m.getLayoutProperty(l.id, "visibility") !== "none");
+        for (const l of syms) m.setLayoutProperty(l.id, "visibility", on ? "none" : "visible");
+      } else if (document.fullscreenElement) void document.exitFullscreen();
       else void document.documentElement.requestFullscreen();
     };
     // the browser's real full screen (F): the map takes the new size

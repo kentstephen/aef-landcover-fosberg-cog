@@ -643,7 +643,7 @@ export function ControlPanel(p: ControlPanelProps) {
 
       {s.error ? <p className="warn small" style={{ marginTop: 8 }}>{s.error}</p> : null}
 
-      <p className="muted small" style={{ marginTop: 8 }}>Keys: Space plays and pauses, F is full screen.</p>
+      <p className="muted small" style={{ marginTop: 8 }}>Keys: Space plays and pauses, F is full screen, L hides and shows the map labels.</p>
 
       <div className="pn-foot">
         <span>Built with <A href="https://github.com/developmentseed/deck.gl-raster">deck.gl-raster</A> by <A href="https://developmentseed.org">Development Seed</A></span>
