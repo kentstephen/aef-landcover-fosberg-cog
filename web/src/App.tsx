@@ -43,21 +43,24 @@ const BEFORE_ID = "aeroway-runway";
 /** 100 ms a frame: a week in 17 s. */
 const INITIAL_FRAME_MS = 100;
 /**
- * Opens on the whole country. The single-run mode opens on the 12Z run of March 12, 2026, the Morrill
- * Fire's day in the Nebraska Sandhills, playing from +0 h so the afternoon peak comes up over the first
- * frames and the afterglow carries it into the 13th. (March 14, 2025 12Z is another: the Southern Plains
+ * Opens on the whole country. The single-run mode opens on the 12Z run of April 22, 2026, the second of
+ * the two wide red flag days, playing from +0 h so the afternoon peak comes up over the first frames and the
+ * afterglow carries it into the 23rd. (March 14, 2025 12Z is another: the Southern Plains
  * outbreak, extreme wind and single-digit humidity from Texas into the Mid-South.)
  */
 const START_VIEW = { longitude: -97, latitude: 38, zoom: 4.6 };
-const START_INIT = new Date("2026-03-12T12:00:00Z");
+const START_INIT = new Date("2026-04-22T12:00:00Z");
 const START_LEAD = 0;
 /**
- * The week the map opens on, over the whole country: March 10 to 16, 2026, the Morrill Fire's run across the
- * Nebraska Sandhills on the 12th and the Plains wind around it. The ground is the 2025 embeddings. (Other good
- * weeks: March 11 to 17, 2025, the Southern Plains outbreak on the 14th; January 5 to 11, 2025, over Southern
- * California, the Palisades and Eaton fires on the 7th.)
+ * The week the map opens on, over the whole country: April 19 to 25, 2026. On the 21st and 22nd red flag
+ * warnings covered 11 to 12 million people across eight states, from east-central New Mexico up the High Plains
+ * into South Dakota and across the Intermountain West, with Particularly Dangerous Situation warnings in
+ * Nebraska and southern Colorado: the widest fire weather picture of the year. The ground is the 2025
+ * embeddings. (Other weeks: February 15 to 21, 2026, the Ranger Road day on the 17th along a thousand-mile
+ * corridor from New Mexico to Wyoming; March 10 to 16, 2026, the Morrill Fire in the Nebraska Sandhills;
+ * July 29 to August 4, 2026, Washington's first PDS red flag warning on August 1.)
  */
-const START_WEEK = new Date("2026-03-10T00:00:00Z");
+const START_WEEK = new Date("2026-04-19T00:00:00Z");
 const START_DAYS = 7;
 /** Terrain under the ground: AWS Terrain Tiles (Mapzen Terrarium), public, 256 px, to zoom 15. */
 const DEM_TILES = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
