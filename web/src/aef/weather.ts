@@ -11,6 +11,8 @@ export type WeatherSource = {
   depth: number;
   inGrid(x: number, y: number): boolean;
   series(x: number, y: number, out: Float32Array): void;
+  /** One pixel at one layer (hour), NaN where not in hand; for the county sums. */
+  at?(x: number, y: number, layer: number): number;
 };
 
 /** The run cache as a source: the FFWI, or the weather part of the ignition logit, per lead. */
@@ -19,6 +21,7 @@ export function cacheSource(cache: FfwiTileCache, kind: WeatherKind): WeatherSou
     depth: HRRR_LEAD_TIME_COUNT,
     inGrid: (x, y) => cache.inGrid(x, y),
     series: kind === "ignition" ? (x, y, out) => cache.ignitionSeries(x, y, out) : (x, y, out) => cache.ffwiSeries(x, y, out),
+    at: kind === "ignition" ? (x, y, l) => cache.ignitionAt(x, y, l) : undefined,
   };
 }
 

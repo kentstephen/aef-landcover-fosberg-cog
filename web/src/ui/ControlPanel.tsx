@@ -40,7 +40,9 @@ export const COLORMAP_CHOICES = [
 export type ColormapChoiceId = (typeof COLORMAP_CHOICES)[number]["id"];
 
 /** What the land cover layer draws: the ground lit by the hour's FFWI, the classes themselves, or nothing. */
-export type FuelChoice = "ignition" | "lit" | "cover" | "off";
+export type FuelChoice = "ignition" | "counties" | "lit" | "cover" | "off";
+
+export type CountyRow = { id: string; name: string; state: string; rate: number; starts: number; bbox: [number, number, number, number] };
 /** How the ignition head meets the ramp. */
 export type IgnScale = "probability" | "logit" | "rank";
 /** The time axis: one 48 h forecast run, or a week of daily 12Z runs stitched hour by hour. */
@@ -120,6 +122,10 @@ export type ControlPanelProps = {
 
   fuel: FuelChoice;
   onFuelChange: (f: FuelChoice) => void;
+  /** Counties mode: the counties in view ranked by the hour's rate; the ground sums' progress (files done, files). */
+  countyRows: CountyRow[];
+  countyProgress: [number, number] | null;
+  onCountyPick: (bbox: [number, number, number, number]) => void;
   pHide: number;
   onPHideChange: (v: number) => void;
   pMax: number;
@@ -235,7 +241,7 @@ export function ControlPanel(p: ControlPanelProps) {
         </button>
       </div>
       {min ? <p className="pn-stamp">{timeTag}</p> : null}
-      {min && p.fuel === "ignition" ? (
+      {min && (p.fuel === "ignition" || p.fuel === "counties") ? (
         <div className="pn-legend">
           <div className="ramp" role="img" aria-label={`${p.groundRamp} ramp`} style={{ backgroundImage: rampGradient(rampStops(p.groundRamp)) }} />
           <div className="pn-legend-ends">
@@ -267,12 +273,13 @@ export function ControlPanel(p: ControlPanelProps) {
         </div>
       ) : null}
 
-      <Fold k="fuel" label="The ground" defaultOpen tag={p.fuel === "ignition" ? "ignition" : p.fuel === "lit" ? "lit by FFWI" : p.fuel === "cover" ? "land cover" : "off"}>
+      <Fold k="fuel" label="The ground" defaultOpen tag={p.fuel === "ignition" ? "ignition" : p.fuel === "counties" ? "counties" : p.fuel === "lit" ? "lit by FFWI" : p.fuel === "cover" ? "land cover" : "off"}>
         <div className="row">
           <Seg
             value={p.fuel}
             options={[
               { id: "ignition", label: "Ignition" },
+              { id: "counties", label: "Counties" },
               // the land cover lit by FFWI x fuel weight, and the classes themselves: not shown; the picture is the ignition head
               // { id: "lit", label: "Lit by FFWI" },
               // { id: "cover", label: "Land cover" },
@@ -289,7 +296,40 @@ export function ControlPanel(p: ControlPanelProps) {
           </Help>
         </div>
         <p className="muted small">Reading: {reader}{s.aefReading > 0 ? ` · ${s.aefReading} tiles in flight` : ""}</p>
-        {p.fuel === "ignition" ? (
+        {p.fuel === "counties" ? (
+          <div className="counties">
+            <p className="muted small">
+              The pixel picture averaged by county: the mean of exp(ground + weather) over the county's 2.6 km overview pixels,
+              in calibrated units (ignitions per 1000 km² per day). Same ramp and scale as the pixels.
+              {p.countyProgress ? ` Ground summed for ${p.countyProgress[0]} of ${p.countyProgress[1]} files.` : ""}
+            </p>
+            {p.countyRows.length > 0 ? (
+              <table className="rank">
+                <thead>
+                  <tr>
+                    <th>county in view</th>
+                    <th>per 1000 km²·day</th>
+                    <th>starts today</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {p.countyRows.map((r) => (
+                    <tr key={r.id} onClick={() => p.onCountyPick(r.bbox)}>
+                      <td>
+                        {r.name}, {r.state}
+                      </td>
+                      <td>{r.rate >= 1 ? r.rate.toFixed(1) : r.rate.toFixed(3)}</td>
+                      <td>{r.starts.toFixed(2)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            ) : (
+              <p className="muted small">No county in view has its ground and weather yet.</p>
+            )}
+          </div>
+        ) : null}
+        {p.fuel === "ignition" || p.fuel === "counties" ? (
           <>
             <div className="row">
               <Seg value={p.groundRamp} options={GROUND_RAMPS.map((r) => ({ id: r.id, label: r.label }))} onChange={p.onGroundRampChange} />

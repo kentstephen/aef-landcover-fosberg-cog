@@ -1,7 +1,8 @@
 import { Decompress } from "fzstd";
 import proj4 from "proj4";
 import { cacheGet, cachePut } from "./disk-cache.js";
-import { classify, type Classified, NO_CLASS } from "./head.js";
+import { classify, type Classified, ignLogit, NO_CLASS } from "./head.js";
+import { lonLatToHrrrPixel } from "../hrrr/metadata.js";
 import { type AefFile, type AefIndex, FULL_WIDTH, loadAefIndex, NUM_BANDS, RECORD_BYTES } from "./index.js";
 import { AEF_YEAR } from "./mosaic.js";
 import { TILE, tileBounds, toLat, toLon } from "./mercator.js";
@@ -17,7 +18,12 @@ import { TILE, tileBounds, toLat, toLon } from "./mercator.js";
 type Msg =
   | { type: "init"; baseUrl: string }
   | { type: "tile"; id: number; z: number; x: number; y: number; level: number }
+  | { type: "units"; ids: Uint16Array; width: number; height: number; lon0: number; lat0: number; step: number }
+  | { type: "county"; id: number; fi: number; level: number }
   | { type: "abort"; id: number };
+
+/** The county (or other unit) under each cell of a lon/lat grid, 0 = none; installed by the "units" message. */
+let units: { ids: Uint16Array; width: number; height: number; lon0: number; lat0: number; step: number } | null = null;
 
 const RANGE_TTL = 30 * 864e5;
 const PLANES_CAP = 256 * 1024 * 1024;
@@ -264,6 +270,63 @@ async function tile(m: { id: number; z: number; x: number; y: number; level: num
   postMessage({ id: m.id, nlcd, esri, cover, ign }, { transfer: [nlcd.buffer, esri.buffer, cover.buffer, ign.buffer] });
 }
 
+/**
+ * One file's ignition ground summed by county and HRRR pixel at an overview level: for every pixel with
+ * ground, exp(ground logit) added to its (county, HRRR pixel) cell, and the pixel counted. The main thread
+ * folds the hour's weather in later (mean exp(ground + weather) per county), so the county is the pixel
+ * picture averaged. Sparse arrays back: county index, HRRR x, y, sum, count.
+ */
+async function county(m: { id: number; fi: number; level: number }) {
+  const idx = await (index ??= loadAefIndex(baseUrl));
+  const f = idx.tiles[m.fi];
+  if (!f || !units) throw new Error("no file or no units");
+  const pl = await fileLevel(idx, f, m.level);
+  const width = pl.width;
+  const res = (10 * FULL_WIDTH) / width;
+  const c = converter(idx.zones[f.zone]!.epsg);
+  const cells = new Map<number, { u: number; hx: number; hy: number; s: number; n: number }>();
+  const u = units;
+  for (let row = 0; row < width; row++) {
+    const uy = f.utmSouth + (row + 0.5) * res;
+    for (let col = 0; col < width; col++) {
+      const q = row * width + col;
+      if (pl.nlcd[q] === NO_CLASS) continue;
+      const [lon, lat] = c.inverse([f.utmWest + (col + 0.5) * res, uy]) as [number, number];
+      const gx = Math.floor((lon - u.lon0) / u.step);
+      const gy = Math.floor((u.lat0 - lat) / u.step);
+      if (gx < 0 || gy < 0 || gx >= u.width || gy >= u.height) continue;
+      const unit = u.ids[gy * u.width + gx]!;
+      if (unit === 0) continue;
+      const h = lonLatToHrrrPixel(lon, lat);
+      if (!h) continue;
+      const key = (unit * 2048 + h.y) * 2048 + h.x;
+      let cell = cells.get(key);
+      if (!cell) {
+        cell = { u: unit, hx: h.x, hy: h.y, s: 0, n: 0 };
+        cells.set(key, cell);
+      }
+      cell.s += Math.exp(ignLogit(pl.ign[q]!));
+      cell.n++;
+    }
+  }
+  const k = cells.size;
+  const unit = new Uint16Array(k);
+  const hx = new Int16Array(k);
+  const hy = new Int16Array(k);
+  const sum = new Float32Array(k);
+  const n = new Uint16Array(k);
+  let i = 0;
+  for (const cell of cells.values()) {
+    unit[i] = cell.u;
+    hx[i] = cell.hx;
+    hy[i] = cell.hy;
+    sum[i] = cell.s;
+    n[i] = cell.n;
+    i++;
+  }
+  postMessage({ id: m.id, county: { unit, hx, hy, sum, n, pixelKm2: (res * res) / 1e6 } }, { transfer: [unit.buffer, hx.buffer, hy.buffer, sum.buffer, n.buffer] });
+}
+
 self.onmessage = (ev: MessageEvent<Msg>) => {
   const m = ev.data;
   if (m.type === "init") {
@@ -273,6 +336,14 @@ self.onmessage = (ev: MessageEvent<Msg>) => {
   }
   if (m.type === "abort") {
     running.get(m.id)?.abort();
+    return;
+  }
+  if (m.type === "units") {
+    units = m;
+    return;
+  }
+  if (m.type === "county") {
+    county(m).catch((e: { name?: string; message?: string }) => postMessage({ id: m.id, error: { name: e?.name || "Error", message: e?.message || String(e) } }));
     return;
   }
   const ac = new AbortController();

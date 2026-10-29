@@ -36,6 +36,8 @@ import { RASTER_VARIABLES, type RasterVariable } from "./hrrr/variables.js";
 import { HOURS_PER_DAY, WeekWeather, weekHourDate, type WeekSpec } from "./hrrr/week.js";
 import type { GroundRamp } from "./aef/ramp.js";
 import { cacheSource } from "./aef/weather.js";
+import { CONUS_MEAN } from "./aef/calibration.js";
+import { CountyTable, countyLayer, loadCounties, unitsGrid, type CountyFeature } from "./counties.js";
 import { DeckGlOverlay } from "./lib/deckgl-overlay.js";
 import { ControlPanel, loadingSummary, type ColormapChoiceId, type FuelChoice, type IgnScale, type Status, type TimeMode } from "./ui/ControlPanel.js";
 
@@ -288,6 +290,47 @@ export default function App() {
     if (f !== "off") setShowRasterState(false);
   }, []);
   const [teacher, setTeacher] = useState<Teacher>("nlcd");
+  // ---- the counties: the pixel picture averaged by county (counties.ts), built once the mode is asked for
+  const [counties, setCounties] = useState<CountyFeature[] | null>(null);
+  useEffect(() => {
+    loadCounties(import.meta.env.BASE_URL).then(setCounties).catch((e) => setError(`counties: ${String(e)}`));
+  }, []);
+  const countyTable = useMemo(() => (counties ? new CountyTable(counties) : null), [counties]);
+  const [countyVersion, setCountyVersion] = useState(0);
+  const countyStarted = useRef(false);
+  useEffect(() => {
+    if (fuel !== "counties" || !countyTable || !counties || !aefIndex || countyStarted.current) return;
+    countyStarted.current = true;
+    if (!coarseRef.current) coarseRef.current = new CoarsePool(import.meta.env.BASE_URL);
+    const pool = coarseRef.current;
+    pool.setUnits(unitsGrid(counties));
+    // 32 px per file (2.56 km pixels): a median county is 250 of them, enough for a sum; one range request a file
+    const level = Math.max(0, aefIndex.levels.indexOf(32));
+    let pending = 0;
+    let timer = 0;
+    const bump = () => {
+      if (timer) return;
+      timer = window.setTimeout(() => {
+        timer = 0;
+        setCountyVersion((v) => v + 1);
+      }, 300);
+    };
+    aefIndex.tiles.forEach((f, fi) => {
+      pending++;
+      pool
+        .county(fi, level, (f.bbox[0] + f.bbox[2]) / 2)
+        .then((part) => {
+          countyTable.add(part);
+          bump();
+        })
+        .catch((e) => console.warn("county sum failed", f.rel, e))
+        .finally(() => {
+          pending--;
+          if (pending === 0) bump();
+        });
+    });
+  }, [fuel, countyTable, counties, aefIndex]);
+
   const [fuelOpacity, setFuelOpacity] = useState(0.9);
   const [groundRamp, setGroundRamp] = useState<GroundRamp>("viridis");
   /** Hours of afterglow on the ground (0 = this hour only). */
@@ -400,15 +443,22 @@ export default function App() {
     if (keys.size > 0) aefLayers.refreshWeather(keys);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [aefLayers, week, weekVersion]);
+  useEffect(() => {
+    if (fuel !== "counties" || !countyTable || !view) return;
+    const { px, py } = countyTable.pixelsInView(view);
+    if (px.length > 0) needWeatherRef.current(px, py);
+    // countyVersion: more counties have their pixels known
+  }, [fuel, countyTable, view, countyVersion, week, timeMode, initTimeIdx]);
   /** The layer of the weather texture on screen: the lead hour of the run or the hour of the week. */
   const timeIdx = timeMode === "week" ? hourIdx : leadTimeIdx;
   const timeDepth = timeMode === "week" ? weekDays * HOURS_PER_DAY : HRRR_LEAD_TIME_COUNT;
   /** Where the tiles' weather textures read from, and a key that changes when that does. */
-  const runSource = useMemo(() => cacheSource(cacheRef.current, fuel === "ignition" ? "ignition" : "ffwi"), [fuel]);
+  const ignitionLike = fuel === "ignition" || fuel === "counties";
+  const runSource = useMemo(() => cacheSource(cacheRef.current, ignitionLike ? "ignition" : "ffwi"), [ignitionLike]);
   const weatherSrc = timeMode === "week" && week ? week : runSource;
   timeModeRef.current = timeMode;
   depthRef.current = timeDepth;
-  const weatherKey = timeMode === "week" && week ? `week|${week.id}` : `${fuel === "ignition" ? "ignition" : "ffwi"}|run`;
+  const weatherKey = timeMode === "week" && week ? `week|${week.id}` : `${ignitionLike ? "ignition" : "ffwi"}|run`;
 
   // ---- hover: lon/lat -> class under the cursor and FFWI at the HRRR pixel
   const [hover, setHover] = useState<{ lon: number; lat: number; x: number; y: number } | null>(null);
@@ -478,6 +528,37 @@ export default function App() {
     [leadTimeIdx, colormapTexture, colormapIndex, hideBelow, rescaleMax, rasterVariable, varDef, tauHours],
   );
 
+  const [countyHover, setCountyHover] = useState<{ i: number; x: number; y: number } | null>(null);
+  /** The counties in view ranked by this hour's rate, for the panel's table. */
+  const countyRows = useMemo(() => {
+    if (fuel !== "counties" || !countyTable || !counties || !view) return [];
+    const odds = countyTable.hour(Math.floor(timeIdx), weatherSrc, cacheVersion * 1e6 + weekVersion);
+    const rows: { id: string; name: string; state: string; rate: number; starts: number; bbox: [number, number, number, number] }[] = [];
+    counties.forEach((f, i) => {
+      const b = f.properties.bbox;
+      if (b[2] < view[0] || b[0] > view[2] || b[3] < view[1] || b[1] > view[3]) return;
+      const o = odds[i]!;
+      if (!(o > 0)) return;
+      const rate = CountyTable.rate(o);
+      rows.push({ id: f.id, name: f.properties.name, state: f.properties.state, rate, starts: (rate * f.properties.km2) / 1000, bbox: b });
+    });
+    rows.sort((a, b) => b.rate - a.rate);
+    return rows.slice(0, 15);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fuel, countyTable, counties, view, timeIdx, weatherSrc, cacheVersion, weekVersion, countyVersion]);
+  const countyInfo = useMemo(() => {
+    if (!countyHover || !countyTable || !counties) return null;
+    const f = counties[countyHover.i];
+    if (!f) return null;
+    const o = countyTable.hour(Math.floor(timeIdx), weatherSrc, cacheVersion * 1e6 + weekVersion)[countyHover.i]!;
+    const rate = o > 0 ? CountyTable.rate(o) : NaN;
+    return { f, rate, starts: (rate * f.properties.km2) / 1000, covered: countyTable.cells[countyHover.i]!.total > 0 };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [countyHover, countyTable, counties, timeIdx, weatherSrc, cacheVersion, weekVersion, countyVersion]);
+  const pickCounty = useCallback((bbox: [number, number, number, number]) => {
+    mapRef.current?.getMap().fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 80, duration: 900 });
+  }, []);
+
   const deckLayers = useMemo(() => {
     const out: unknown[] = [];
     if (showRaster && source && getTileData && colormapTexture) {
@@ -500,7 +581,7 @@ export default function App() {
     if (aefLayers) {
       out.push(
         ...aefLayers.layers({
-          mode: fuel === "cover" ? "cover" : fuel === "ignition" ? "ignition" : "lit",
+          mode: fuel === "cover" ? "cover" : ignitionLike ? "ignition" : "lit",
           zoom,
           teacher,
           leadTimeIdx: timeIdx + hourFrac,
@@ -522,8 +603,29 @@ export default function App() {
           light,
           opacity: fuelOpacity,
           ramp: groundRamp,
-          visible: fuel !== "off",
+          visible: fuel !== "off" && fuel !== "counties",
           beforeId: BEFORE_ID,
+        }),
+      );
+    }
+    if (fuel === "counties" && countyTable && counties) {
+      const h0 = Math.floor(timeIdx);
+      const wv = cacheVersion * 1e6 + weekVersion;
+      const odds0 = countyTable.hour(h0, weatherSrc, wv);
+      const odds1 = hourFrac > 0 && h0 + 1 < timeDepth ? countyTable.hour(h0 + 1, weatherSrc, wv) : null;
+      out.push(
+        countyLayer({
+          features: counties,
+          odds0,
+          odds1,
+          frac: hourFrac,
+          scale: ignScale === "logit" || ignScale === "rank" ? { kind: "logit", lo: ignScale === "rank" && rankRamp ? rankRamp[0] : zLo, hi: ignScale === "rank" && rankRamp ? rankRamp[1] : zHi } : { kind: "probability", lo: pHide, hi: pMax },
+          ramp: groundRamp,
+          opacity: fuelOpacity,
+          visible: true,
+          beforeId: BEFORE_ID,
+          trigger: [h0, hourFrac, countyVersion, wv, ignScale, zLo, zHi, pHide, pMax, groundRamp],
+          onHover: (i, x, y) => setCountyHover(i < 0 ? null : { i, x, y }),
         }),
       );
     }
@@ -552,7 +654,7 @@ export default function App() {
     showRaster, source, getTileData, colormapTexture, initTimeIdx, windMode, rasterVariable, selection, renderTile, rasterOpacity,
     leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity, groundRamp, zoom,
     glowHours, grain, light, contourLines, pHide, pMax, ignScale, zLo, zHi, rankRamp, useWeather, standingAlpha, wxGate, fieldAlpha,
-    timeIdx, hourFrac, weatherSrc, weatherKey, timeMode,
+    timeIdx, hourFrac, weatherSrc, weatherKey, timeMode, countyTable, counties, countyVersion, cacheVersion, weekVersion, timeDepth,
   ]);
 
   const status: Status = {
@@ -666,6 +768,9 @@ export default function App() {
         weekDayStates={timeMode === "week" && week ? week.dayStates() : []}
         fuel={fuel}
         onFuelChange={setFuel}
+        countyRows={countyRows}
+        countyProgress={countyTable && aefIndex ? [countyTable.filesDone, aefIndex.tiles.length] : null}
+        onCountyPick={pickCounty}
         pHide={pHide}
         onPHideChange={setPHide}
         pMax={pMax}
@@ -727,7 +832,27 @@ export default function App() {
         onTauHoursChange={setTauHours}
         status={status}
       />
-      {hover && hoverInfo && (hoverInfo.className || Number.isFinite(hoverInfo.ffwi)) ? (
+      {fuel === "counties" && countyHover && countyInfo ? (
+        <div style={tooltipStyle(countyHover.x, countyHover.y)}>
+          <div style={{ fontWeight: 600 }}>
+            {countyInfo.f.properties.name}, {countyInfo.f.properties.state}
+          </div>
+          <div>
+            {Number.isFinite(countyInfo.rate)
+              ? `${countyInfo.rate >= 1 ? countyInfo.rate.toFixed(1) : countyInfo.rate.toFixed(3)} ignitions per 1000 km² per day · ${(countyInfo.rate / CONUS_MEAN).toFixed(1)}x the CONUS mean`
+              : countyInfo.covered
+                ? "forecast not loaded here yet"
+                : "ground not summed yet"}
+          </div>
+          <div style={{ color: "#bbb" }}>
+            {Number.isFinite(countyInfo.starts) ? `about ${countyInfo.starts.toFixed(2)} starts expected today over ${Math.round(countyInfo.f.properties.km2).toLocaleString()} km²` : ""}
+          </div>
+          <div style={{ color: "#aaa" }}>
+            {timeMode === "week" ? `${weekHourLabel} (12Z run, +${hourIdx % HOURS_PER_DAY} h)` : `${runLabel} +${leadTimeIdx} h`}
+          </div>
+        </div>
+      ) : null}
+      {fuel !== "counties" && hover && hoverInfo && (hoverInfo.className || Number.isFinite(hoverInfo.ffwi)) ? (
         <div style={tooltipStyle(hover.x, hover.y)}>
           <div style={{ fontWeight: 600 }}>
             {hoverInfo.ground

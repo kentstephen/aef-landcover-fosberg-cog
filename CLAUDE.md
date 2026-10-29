@@ -32,6 +32,15 @@ weights; static site.
 Order of work: Python first (the model, checked by looking at its land cover
 maps), then the TypeScript map.
 
+## Status (2026-10-29, counties branch)
+
+- Branch `counties`: a "Counties" ground mode, the pixel picture averaged by county live in the browser
+  (`web/src/counties.ts`, `docs/counties.md`): the coarse workers sum exp(ground logit) per county and
+  HRRR pixel over all 1,982 files at the 32 px level (109 s cold), the hour's weather is folded in per
+  county, drawn as a GeoJsonLayer with the ground's ramp and scale, a ranked table of the counties in
+  view in the panel. County shapes: `scripts/build_counties.py` -> `web/public/counties.json`. The
+  number driving the shading (rate per area now) is open.
+
 ## Status (2026-10-29, after the calibration check)
 
 - Opens on August 3 to 10, 2026 (8 days), the single run on August 10 12Z.

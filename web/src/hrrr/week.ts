@@ -319,6 +319,9 @@ export class WeekWeather {
     }
   }
 
+  /** WeatherSource.at: the term at one pixel and hour. */
+  at = (x: number, y: number, h: number): number => this.termAt(x, y, h);
+
   /** The weather term at one pixel and hour of the week, NaN if not in hand. */
   termAt(x: number, y: number, h: number): number {
     const d = Math.floor(h / HOURS_PER_DAY);
