@@ -13,6 +13,8 @@ export type WeatherSource = {
   series(x: number, y: number, out: Float32Array): void;
   /** One pixel at one layer (hour), NaN where not in hand; for the county sums. */
   at?(x: number, y: number, layer: number): number;
+  /** The whole HRRR grid at one layer (row-major, width x height), NaN where not in hand; faster than `at` in a loop. */
+  plane?(layer: number): Float32Array;
 };
 
 /** The run cache as a source: the FFWI, or the weather part of the ignition logit, per lead. */
@@ -46,7 +48,9 @@ export type WeatherGrid = {
 
 /** Nodes at cell centers; `toLonLat` maps tile fractions (u right, v down) to lon/lat. */
 export function makeGrid(extentM: number, toLonLat: (u: number, v: number) => [number, number]): WeatherGrid {
-  const n = Math.max(4, Math.min(64, Math.round(extentM / 800)));
+  // one node per 800 m, at least 4 x 4, at most 128 x 128 (a week's texture is 6 MB a tile at 128; the shader reads the
+  // nodes bicubically, so between nodes the field is a curve whatever their spacing)
+  const n = Math.max(4, Math.min(128, Math.round(extentM / 800)));
   const fx = new Float32Array(n * n);
   const fy = new Float32Array(n * n);
   const px = new Int16Array(n * n);

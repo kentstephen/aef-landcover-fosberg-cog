@@ -334,7 +334,7 @@ export default function App() {
   }, [fuel, countyTable, counties, aefIndex]);
 
   const [fuelOpacity, setFuelOpacity] = useState(0.9);
-  const [groundRamp, setGroundRamp] = useState<GroundRamp>("viridis");
+  const [groundRamp, setGroundRamp] = useState<GroundRamp>("inferno");
   /** Hours of afterglow on the ground (0 = this hour only). */
   // off by default: at the same point the past day's peak adds nothing to this hour (ignition/hour_memory.py)
   const [glowHours, setGlowHours] = useState(0);
@@ -531,32 +531,35 @@ export default function App() {
   );
 
   const [countyHover, setCountyHover] = useState<{ i: number; x: number; y: number } | null>(null);
-  /** The counties in view ranked by this hour's rate, for the panel's table. */
+  /** The hide line as a logit: what the raster lights, so the county's share is of the same pixels. */
+  const zHideCounty = ignScale === "probability" ? Math.log(pHide / (1 - pHide)) : ignScale === "rank" && rankRamp ? rankRamp[0] : zLo;
+  /** The counties in view ranked by this hour's share lit, for the panel's table. */
   const countyRows = useMemo(() => {
     if (fuel !== "counties" || !countyTable || !counties || !view) return [];
-    const odds = countyTable.hour(Math.floor(timeIdx), weatherSrc, cacheVersion * 1e6 + weekVersion);
-    const rows: { id: string; name: string; state: string; rate: number; starts: number; bbox: [number, number, number, number] }[] = [];
+    const ch = countyTable.hour(Math.floor(timeIdx), zHideCounty, wxGate, weatherSrc, cacheVersion * 1e6 + weekVersion);
+    const rows: { id: string; name: string; state: string; share: number; rate: number; starts: number; bbox: [number, number, number, number] }[] = [];
     counties.forEach((f, i) => {
       const b = f.properties.bbox;
       if (b[2] < view[0] || b[0] > view[2] || b[3] < view[1] || b[1] > view[3]) return;
-      const o = odds[i]!;
-      if (!(o > 0)) return;
-      const rate = CountyTable.rate(o);
-      rows.push({ id: f.id, name: f.properties.name, state: f.properties.state, rate, starts: (rate * f.properties.km2) / 1000, bbox: b });
+      const sh = ch.share[i]!;
+      if (!(sh > 0)) return;
+      const rate = CountyTable.rate(ch.odds[i]!);
+      rows.push({ id: f.id, name: f.properties.name, state: f.properties.state, share: sh, rate, starts: (rate * f.properties.km2) / 1000, bbox: b });
     });
-    rows.sort((a, b) => b.rate - a.rate);
+    rows.sort((a, b) => b.share - a.share);
     return rows.slice(0, 15);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [fuel, countyTable, counties, view, timeIdx, weatherSrc, cacheVersion, weekVersion, countyVersion]);
+  }, [fuel, countyTable, counties, view, timeIdx, zHideCounty, wxGate, weatherSrc, cacheVersion, weekVersion, countyVersion]);
   const countyInfo = useMemo(() => {
     if (!countyHover || !countyTable || !counties) return null;
     const f = counties[countyHover.i];
     if (!f) return null;
-    const o = countyTable.hour(Math.floor(timeIdx), weatherSrc, cacheVersion * 1e6 + weekVersion)[countyHover.i]!;
-    const rate = o > 0 ? CountyTable.rate(o) : NaN;
-    return { f, rate, starts: (rate * f.properties.km2) / 1000, covered: countyTable.cells[countyHover.i]!.total > 0 };
+    const ch = countyTable.hour(Math.floor(timeIdx), zHideCounty, wxGate, weatherSrc, cacheVersion * 1e6 + weekVersion);
+    const share = ch.share[countyHover.i]!;
+    const rate = share === share ? CountyTable.rate(ch.odds[countyHover.i]!) : NaN;
+    return { f, share, rate, starts: (rate * f.properties.km2) / 1000, covered: countyTable.cells[countyHover.i]!.total > 0 };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [countyHover, countyTable, counties, timeIdx, weatherSrc, cacheVersion, weekVersion, countyVersion]);
+  }, [countyHover, countyTable, counties, timeIdx, zHideCounty, wxGate, weatherSrc, cacheVersion, weekVersion, countyVersion]);
   const pickCounty = useCallback((bbox: [number, number, number, number]) => {
     mapRef.current?.getMap().fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 80, duration: 900 });
   }, []);
@@ -613,20 +616,19 @@ export default function App() {
     if (fuel === "counties" && countyTable && counties) {
       const h0 = Math.floor(timeIdx);
       const wv = cacheVersion * 1e6 + weekVersion;
-      const odds0 = countyTable.hour(h0, weatherSrc, wv);
-      const odds1 = hourFrac > 0 && h0 + 1 < timeDepth ? countyTable.hour(h0 + 1, weatherSrc, wv) : null;
+      const c0 = countyTable.hour(h0, zHideCounty, wxGate, weatherSrc, wv);
+      const c1 = hourFrac > 0 && h0 + 1 < timeDepth ? countyTable.hour(h0 + 1, zHideCounty, wxGate, weatherSrc, wv) : null;
       out.push(
         countyLayer({
           features: counties,
-          odds0,
-          odds1,
+          share0: c0.share,
+          share1: c1 ? c1.share : null,
           frac: hourFrac,
-          scale: ignScale === "logit" || ignScale === "rank" ? { kind: "logit", lo: ignScale === "rank" && rankRamp ? rankRamp[0] : zLo, hi: ignScale === "rank" && rankRamp ? rankRamp[1] : zHi } : { kind: "probability", lo: pHide, hi: pMax },
           ramp: groundRamp,
           opacity: fuelOpacity,
           visible: true,
           beforeId: BEFORE_ID,
-          trigger: [h0, hourFrac, countyVersion, wv, ignScale, zLo, zHi, pHide, pMax, groundRamp],
+          trigger: [h0, hourFrac, countyVersion, wv, zHideCounty, wxGate, groundRamp],
           onHover: (i, x, y) => setCountyHover(i < 0 ? null : { i, x, y }),
         }),
       );
@@ -656,7 +658,7 @@ export default function App() {
     showRaster, source, getTileData, colormapTexture, initTimeIdx, windMode, rasterVariable, selection, renderTile, rasterOpacity,
     leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity, groundRamp, zoom,
     glowHours, grain, light, contourLines, pHide, pMax, ignScale, zLo, zHi, rankRamp, useWeather, standingAlpha, wxGate, fieldAlpha,
-    timeIdx, hourFrac, weatherSrc, weatherKey, timeMode, countyTable, counties, countyVersion, cacheVersion, weekVersion, timeDepth,
+    timeIdx, hourFrac, weatherSrc, weatherKey, timeMode, countyTable, counties, countyVersion, cacheVersion, weekVersion, timeDepth, zHideCounty, wxGate,
   ]);
 
   const status: Status = {
@@ -840,14 +842,16 @@ export default function App() {
             {countyInfo.f.properties.name}, {countyInfo.f.properties.state}
           </div>
           <div>
-            {Number.isFinite(countyInfo.rate)
-              ? `${countyInfo.rate >= 1 ? countyInfo.rate.toFixed(1) : countyInfo.rate.toFixed(3)} ignitions per 1000 km² per day · ${(countyInfo.rate / CONUS_MEAN).toFixed(1)}x the CONUS mean`
+            {Number.isFinite(countyInfo.share)
+              ? `${Math.round(countyInfo.share * 100)}% of its ground lit this hour (weather over the gate, sum over the hide line)`
               : countyInfo.covered
                 ? "forecast not loaded here yet"
                 : "ground not summed yet"}
           </div>
           <div style={{ color: "#bbb" }}>
-            {Number.isFinite(countyInfo.starts) ? `about ${countyInfo.starts.toFixed(2)} starts expected today over ${Math.round(countyInfo.f.properties.km2).toLocaleString()} km²` : ""}
+            {Number.isFinite(countyInfo.rate)
+              ? `about ${countyInfo.rate >= 1 ? countyInfo.rate.toFixed(1) : countyInfo.rate.toFixed(3)} ignitions per 1000 km² per day, ${(countyInfo.rate / CONUS_MEAN).toFixed(1)}x the CONUS mean · ${countyInfo.starts.toFixed(2)} starts expected today over ${Math.round(countyInfo.f.properties.km2).toLocaleString()} km²`
+              : ""}
           </div>
           <div style={{ color: "#aaa" }}>
             {timeMode === "week" ? `${weekHourLabel} (12Z run, +${hourIdx % HOURS_PER_DAY} h)` : `${runLabel} +${leadTimeIdx} h`}

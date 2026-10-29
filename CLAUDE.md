@@ -75,8 +75,8 @@ maps), then the TypeScript map.
 - Memory probes: `.claude/memory/mem2.py <url> <seconds>` (RSS per Chromium process, heap, the week's
   queue), `.claude/memory/probe_week.py` (days in hand, tiles, tooltip, screenshot).
 - Opens on July 26 to August 1, 2026 (ranked by `ignition/rank_weeks.py`: the head's weather term over a
-  sample of the HRRR analysis, the week with the most area-hours above the gate). Ground ramps: Viridis
-  (default), Magma, Inferno, Solar, Fire (`aef/ramp.ts`, 50 stops each, ends tuned to the dark map). The
+  sample of the HRRR analysis, the week with the most area-hours above the gate). Ground ramps: Inferno
+  (default), Viridis, Magma, Solar, Fire (`aef/ramp.ts`, 50 stops each, ends tuned to the dark map). The
   hour's weather term also draws as a gray field under everything (`fieldAlpha`), and the ground holds a past
   hour by land cover (hold hours in `aef/fuel.ts`: grass 3 h, shrub 6, evergreen 24, built 0). Keys: Space,
   F full screen, L basemap labels, Q tooltip. The collapsed card shows the hour and a ramp legend.

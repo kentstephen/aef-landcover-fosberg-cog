@@ -118,8 +118,8 @@ export function evenLightness(stops: readonly string[]): string[] {
 
 export type GroundRamp = "viridis" | "inferno" | "magma" | "solar" | "fire";
 export const GROUND_RAMPS: { id: GroundRamp; label: string; stops: readonly string[] }[] = [
-  { id: "viridis", label: "Viridis", stops: evenLightness(VIRIDIS_STOPS) },
   { id: "inferno", label: "Inferno", stops: evenLightness(INFERNO_STOPS) },
+  { id: "viridis", label: "Viridis", stops: evenLightness(VIRIDIS_STOPS) },
   { id: "magma", label: "Magma", stops: evenLightness(MAGMA_STOPS) },
   { id: "solar", label: "Solar", stops: evenLightness(SOLAR_STOPS) },
   { id: "fire", label: "Fire", stops: evenLightness(FIRE_STOPS) },

@@ -42,7 +42,7 @@ export type ColormapChoiceId = (typeof COLORMAP_CHOICES)[number]["id"];
 /** What the land cover layer draws: the ground lit by the hour's FFWI, the classes themselves, or nothing. */
 export type FuelChoice = "ignition" | "counties" | "lit" | "cover" | "off";
 
-export type CountyRow = { id: string; name: string; state: string; rate: number; starts: number; bbox: [number, number, number, number] };
+export type CountyRow = { id: string; name: string; state: string; share: number; rate: number; starts: number; bbox: [number, number, number, number] };
 /** How the ignition head meets the ramp. */
 export type IgnScale = "probability" | "logit" | "rank";
 /** The time axis: one 48 h forecast run, or a week of daily 12Z runs stitched hour by hour. */
@@ -210,7 +210,9 @@ export function ControlPanel(p: ControlPanelProps) {
   weekEnd.setUTCDate(weekEnd.getUTCDate() + p.weekDays - 1);
   /** The ramp's two ends and what they are, for the collapsed card's legend. */
   const legendEnds: [string, string, string] =
-    p.ignScale === "probability"
+    p.fuel === "counties"
+      ? ["0%", "100%", "of the county's ground lit"]
+      : p.ignScale === "probability"
       ? [`${Math.round(p.pHide * 100)}%`, `${(p.pMax * 100).toFixed(p.pMax >= 0.99 ? 1 : 0)}%`, "ignition probability"]
       : p.ignScale === "logit"
         ? [p.zLo.toFixed(1), p.zHi.toFixed(1), "ignition logit"]
@@ -299,8 +301,9 @@ export function ControlPanel(p: ControlPanelProps) {
         {p.fuel === "counties" ? (
           <div className="counties">
             <p className="muted small">
-              The pixel picture averaged by county: the mean of exp(ground + weather) over the county's 2.6 km overview pixels,
-              in calibrated units (ignitions per 1000 km² per day). Same ramp and scale as the pixels.
+              The pixel picture by county: the share of the county's 2.6 km overview pixels the raster lights this hour
+              (the weather over the gate and the sum over the hide line), 0 clear to all of it at the ramp top. Starts today is the sum of the calibrated rate over
+              the county's land.
               {p.countyProgress ? ` Ground summed for ${p.countyProgress[0]} of ${p.countyProgress[1]} files.` : ""}
             </p>
             {p.countyRows.length > 0 ? (
@@ -308,7 +311,7 @@ export function ControlPanel(p: ControlPanelProps) {
                 <thead>
                   <tr>
                     <th>county in view</th>
-                    <th>per 1000 km²·day</th>
+                    <th>ground lit</th>
                     <th>starts today</th>
                   </tr>
                 </thead>
@@ -318,7 +321,7 @@ export function ControlPanel(p: ControlPanelProps) {
                       <td>
                         {r.name}, {r.state}
                       </td>
-                      <td>{r.rate >= 1 ? r.rate.toFixed(1) : r.rate.toFixed(3)}</td>
+                      <td>{Math.round(r.share * 100)}%</td>
                       <td>{r.starts.toFixed(2)}</td>
                     </tr>
                   ))}

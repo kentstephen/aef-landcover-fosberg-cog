@@ -322,6 +322,24 @@ export class WeekWeather {
   /** WeatherSource.at: the term at one pixel and hour. */
   at = (x: number, y: number, h: number): number => this.termAt(x, y, h);
 
+  /** WeatherSource.plane: the term over the whole HRRR grid at one hour, NaN where not in hand (the county loops). */
+  plane = (h: number): Float32Array => {
+    const out = new Float32Array(HRRR_GRID.width * HRRR_GRID.height).fill(NaN);
+    const d = Math.floor(h / HOURS_PER_DAY);
+    const hh = h - d * HOURS_PER_DAY;
+    for (const [key, s] of this.shards) {
+      if (!key.startsWith(`${d}|`)) continue;
+      const stride = s.term.length / HOURS_PER_DAY;
+      const rows = stride / s.width;
+      for (let r = 0; r < rows; r++) {
+        const o = (s.rowStart + r) * HRRR_GRID.width + s.colStart;
+        const q = hh * stride + r * s.width;
+        for (let c = 0; c < s.width; c++) out[o + c] = termLogit(s.term[q + c]!);
+      }
+    }
+    return out;
+  };
+
   /** The weather term at one pixel and hour of the week, NaN if not in hand. */
   termAt(x: number, y: number, h: number): number {
     const d = Math.floor(h / HOURS_PER_DAY);

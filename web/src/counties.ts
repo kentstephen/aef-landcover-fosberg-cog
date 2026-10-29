@@ -4,13 +4,15 @@ import { OFFSET } from "./aef/calibration.js";
 import type { CountyPart } from "./aef/coarse.js";
 import { rampStripe, type GroundRamp, rampStops } from "./aef/ramp.js";
 import type { WeatherSource } from "./aef/weather.js";
-import { HRRR_SHARD } from "./hrrr/metadata.js";
+import { HRRR_GRID, HRRR_SHARD } from "./hrrr/metadata.js";
+import { IGN_HI, IGN_LO } from "./aef/head.js";
 
 /**
- * The pixel picture averaged by county. The coarse workers sum exp(ground logit) per county and HRRR pixel
+ * The pixel picture averaged by county. The coarse workers bin the ground logit per county and HRRR pixel
  * over every file of the index at one overview level (coarse.worker.ts `county`); here the hour's weather
  * term is folded in per HRRR pixel, so a county's value is the mean of exp(ground + weather) over its
- * pixels: the mean odds, which in calibrated units is ignitions per area and time. The county shapes are
+ * pixels over the hide line, the share of the county the raster would light, and the mean odds, which in
+ * calibrated units is ignitions per area and time. The county shapes are
  * the Census 2023 cartographic boundaries (scripts/build_counties.py).
  */
 export type CountyProps = { name: string; state: string; km2: number; bbox: [number, number, number, number] };
@@ -94,8 +96,25 @@ export function unitsGrid(features: CountyFeature[]): UnitsGrid {
   return { ids, width: GW, height: GH, lon0: LON0, lat0: LAT0, step: STEP };
 }
 
-/** One county's cells: the HRRR pixels its ground pixels fall in, the sum of exp(ground logit) and the count in each. */
-type Cells = { hx: number[]; hy: number[]; sum: number[]; n: number[]; total: number };
+/** One county's cells: the HRRR pixels its ground pixels fall in, with a histogram of the ground logit in each. */
+type Cells = { hx: number[]; hy: number[]; hist: Uint8Array[]; total: number };
+
+const BINS = 16;
+/** A county needs this many ground pixels (about 160 km2 at 2.56 km) to get a value: Virginia's independent cities and the
+ * like, a few pixels of developed ground, otherwise read 100 percent lit and top every list. */
+const MIN_PIXELS = 25;
+const BIN_W = (IGN_HI - IGN_LO) / BINS;
+/** Bin centers as logits, and their odds. */
+const CENTER = Float64Array.from({ length: BINS }, (_, b) => IGN_LO + (b + 0.5) * BIN_W);
+const CENTER_ODDS = CENTER.map((z) => Math.exp(z));
+
+/** A county's reading at one hour. */
+export type CountyHour = {
+  /** The share of the county's ground pixels over the hide line, NaN under half coverage. */
+  share: Float32Array;
+  /** The mean odds exp(ground + weather) over the same pixels. */
+  odds: Float32Array;
+};
 
 export class CountyTable {
   readonly cells: Cells[];
@@ -105,10 +124,10 @@ export class CountyTable {
   filesDone = 0;
   /** Bumps when the sums change (a file landed). */
   version = 0;
-  private hours = new Map<number, { v: number; wv: number; odds: Float32Array }>();
+  private hours = new Map<string, { v: number; wv: number; out: CountyHour }>();
 
   constructor(readonly features: CountyFeature[]) {
-    this.cells = features.map(() => ({ hx: [], hy: [], sum: [], n: [], total: 0 }));
+    this.cells = features.map(() => ({ hx: [], hy: [], hist: [], total: 0 }));
     this.shardPix = features.map(() => new Map());
   }
 
@@ -119,19 +138,21 @@ export class CountyTable {
       if (!c) continue;
       const hx = p.hx[i]!;
       const hy = p.hy[i]!;
+      const h = p.hist.subarray(i * BINS, (i + 1) * BINS);
+      let n = 0;
+      for (let b = 0; b < BINS; b++) n += h[b]!;
       // the same HRRR pixel may come from two files (a zone seam): add to the existing cell
       let j = -1;
       for (let k = c.hx.length - 1; k >= 0 && k >= c.hx.length - 8; k--) if (c.hx[k] === hx && c.hy[k] === hy) { j = k; break; }
       if (j < 0) {
         c.hx.push(hx);
         c.hy.push(hy);
-        c.sum.push(p.sum[i]!);
-        c.n.push(p.n[i]!);
+        c.hist.push(Uint8Array.from(h));
       } else {
-        c.sum[j]! += p.sum[i]!;
-        c.n[j]! += p.n[i]!;
+        const e = c.hist[j]!;
+        for (let b = 0; b < BINS; b++) e[b] = Math.min(255, e[b]! + h[b]!);
       }
-      c.total += p.n[i]!;
+      c.total += n;
       const sk = `${Math.floor(hy / HRRR_SHARD.height)},${Math.floor(hx / HRRR_SHARD.width)}`;
       const sp = this.shardPix[p.unit[i]! - 1]!;
       if (!sp.has(sk)) sp.set(sk, [hx, hy]);
@@ -157,54 +178,61 @@ export class CountyTable {
   }
 
   /**
-   * Every county's mean odds at one hour: sum over its cells of exp(ground) x exp(weather) over the pixels
-   * with weather in hand; NaN where under half the county's pixels have weather. Cached per hour until
-   * the sums or the weather change (weatherVersion).
+   * Every county at one hour: the share of its ground pixels the raster lights (the hour's weather term at or
+   * over the gate, and ground + weather over zHide), and the mean odds, over the pixels with weather in hand;
+   * NaN under half coverage.
+   * Cached per hour and hide line until the sums or the weather change (weatherVersion).
    */
-  hour(h: number, src: WeatherSource, weatherVersion: number): Float32Array {
-    const hit = this.hours.get(h);
-    if (hit && hit.v === this.version && hit.wv === weatherVersion) return hit.odds;
-    const odds = new Float32Array(this.features.length).fill(NaN);
-    if (src.at) {
-      for (let i = 0; i < this.cells.length; i++) {
+  hour(h: number, zHide: number, wxGate: number, src: WeatherSource, weatherVersion: number): CountyHour {
+    const key = `${h}|${zHide.toFixed(3)}|${wxGate.toFixed(3)}`;
+    const hit = this.hours.get(key);
+    if (hit && hit.v === this.version && hit.wv === weatherVersion) return hit.out;
+    const n = this.features.length;
+    const out: CountyHour = { share: new Float32Array(n).fill(NaN), odds: new Float32Array(n).fill(NaN) };
+    const plane = src.plane?.(h);
+    const at = src.at;
+    if (plane || at) {
+      for (let i = 0; i < n; i++) {
         const c = this.cells[i]!;
+        let lit = 0;
         let acc = 0;
         let cnt = 0;
         for (let k = 0; k < c.hx.length; k++) {
-          const w = src.at(c.hx[k]!, c.hy[k]!, h);
+          const w = plane ? plane[c.hy[k]! * HRRR_GRID.width + c.hx[k]!]! : at!(c.hx[k]!, c.hy[k]!, h);
           if (w !== w) continue;
-          acc += c.sum[k]! * Math.exp(w);
-          cnt += c.n[k]!;
+          const hist = c.hist[k]!;
+          const ew = Math.exp(w);
+          // the first bin whose center plus the weather clears the hide line; none if the weather is under the gate
+          const b0 = w >= wxGate ? Math.max(0, Math.ceil((zHide - w - IGN_LO) / BIN_W - 0.5)) : BINS;
+          for (let b = 0; b < BINS; b++) {
+            const m = hist[b]!;
+            if (m === 0) continue;
+            cnt += m;
+            acc += m * CENTER_ODDS[b]! * ew;
+            if (b >= b0) lit += m;
+          }
         }
-        if (c.total > 0 && cnt >= 0.5 * c.total) odds[i] = acc / cnt;
+        if (c.total >= MIN_PIXELS && cnt >= 0.5 * c.total) {
+          out.share[i] = lit / cnt;
+          out.odds[i] = acc / cnt;
+        }
       }
     }
-    this.hours.set(h, { v: this.version, wv: weatherVersion, odds });
-    return odds;
+    this.hours.set(key, { v: this.version, wv: weatherVersion, out });
+    return out;
   }
 
-  /** The hour's odds as ignitions per 1000 km2 per day. */
+  /** Mean odds as ignitions per 1000 km2 per day. */
   static rate(odds: number): number {
     return odds * TO_RATE;
   }
 }
 
-export type CountyScale = { kind: "probability" | "logit"; lo: number; hi: number };
-
-/** Mean odds through the panel's scale to a ramp position 0..1, or -1 for hidden. */
-function position(odds: number, sc: CountyScale): number {
-  if (!(odds > 0)) return -1;
-  const v = sc.kind === "probability" ? odds / (1 + odds) : Math.log(odds);
-  const t = (v - sc.lo) / (sc.hi - sc.lo);
-  return t < 0 ? -1 : Math.min(1, t);
-}
-
 export function countyLayer(o: {
   features: CountyFeature[];
-  odds0: Float32Array;
-  odds1: Float32Array | null;
+  share0: Float32Array;
+  share1: Float32Array | null;
   frac: number;
-  scale: CountyScale;
   ramp: GroundRamp;
   opacity: number;
   visible: boolean;
@@ -213,15 +241,14 @@ export function countyLayer(o: {
   onHover: (index: number, x: number, y: number) => void;
 }): GeoJsonLayer<CountyProps> {
   const stripe = rampStripe(rampStops(o.ramp));
+  // the county's color is the share of its ground the raster would light: 0 clear, 1 the ramp top; fades in under 5 percent
   const color = (i: number): [number, number, number, number] => {
-    const a = o.odds0[i]!;
-    const b = o.odds1 ? o.odds1[i]! : NaN;
-    const odds = b === b && a === a ? a + (b - a) * o.frac : a === a ? a : b;
-    const t = position(odds, o.scale);
-    if (t < 0) return [0, 0, 0, 0];
-    const x = Math.round(t * 255) * 4;
-    // fades in over the first tenth of the ramp so the hide line is not a hard edge
-    return [stripe[x]!, stripe[x + 1]!, stripe[x + 2]!, Math.round(255 * Math.min(1, t / 0.1))];
+    const a = o.share0[i]!;
+    const b = o.share1 ? o.share1[i]! : NaN;
+    const t = b === b && a === a ? a + (b - a) * o.frac : a === a ? a : b;
+    if (!(t > 0)) return [0, 0, 0, 0];
+    const x = Math.round(Math.min(1, t) * 255) * 4;
+    return [stripe[x]!, stripe[x + 1]!, stripe[x + 2]!, Math.round(255 * Math.min(1, t / 0.05))];
   };
   const index = new Map(o.features.map((f, i) => [f.id, i]));
   return new GeoJsonLayer<CountyProps>({

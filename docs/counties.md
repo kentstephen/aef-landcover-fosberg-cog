@@ -12,12 +12,18 @@ thread.
 - `web/src/counties.ts`: the county under each cell of a 0.02 degree lon/lat grid, drawn once to an offscreen
   canvas (index in the fill color; blended edge cells take a neighbor), sent to every coarse worker.
 - `coarse.worker.ts` `county`: for one file at the 32 px level (2.56 km pixels, one range request a file), every
-  pixel with ground adds exp(ground logit) to its (county, HRRR pixel) cell. 1,982 files; measured 109 s cold
-  for the whole country, headless.
-- `CountyTable.hour(h)`: per county, sum over its cells of exp(ground) x exp(weather term at h) over the pixels
-  whose weather is in hand, divided by their count: the mean odds, NaN under half coverage. Cached per hour.
-  Rate = mean odds x exp(calibration offset) x 24,000 = ignitions per 1000 km2 per day; starts today = rate x
-  the county's land area / 1000.
+  pixel with ground is counted into a 16-bin histogram of its ground logit in its (county, HRRR pixel) cell.
+  1,982 files; measured 109 s cold for the whole country, headless.
+- `CountyTable.hour(h, zHide)`: per county, over the cells whose weather is in hand, the share of pixels the raster
+  lights (the weather term at or over the gate, and ground + weather over the hide line), and the mean odds exp(ground +
+  weather). NaN under half coverage; cached per hour and hide line. The SHARE drives the color (0 clear, all
+  lit at the ramp top). The mean odds give the count: rate = mean odds x exp(calibration offset) x 24,000 =
+  ignitions per 1000 km2 per day; starts today = rate x the county's land area / 1000.
+- Why the share and not the mean odds: the mean of odds belongs to a county's hottest pixels (exp is convex),
+  so a county with five percent of its ground at long odds read as lit while the raster showed only that five
+  percent; the whole East lit up, Maine included. The share is the raster averaged.
+- Counties under 25 ground pixels (about 160 km2) get no value: Virginia's independent cities are a few pixels of
+  developed ground and read 100 percent lit at night.
 - The weather under the counties in view is asked for through the same side channel as the tiles (one HRRR
   pixel per shard a county touches), so a county's number appears when its shards land, like the pixels.
 - Drawn as a deck.gl GeoJsonLayer with the ground's ramp and scale (probability or logit), no outlines;
@@ -27,7 +33,7 @@ thread.
 
 ## What it shows so far (first look, August 6, 2026 04Z, the West)
 
-Small urban counties top the rate list: Denver, Broomfield, Salt Lake, Oklahoma. This is the head's known
+With the mean odds driving the color (since replaced by the share lit), small urban counties topped the rate list: Denver, Broomfield, Salt Lake, Oklahoma. This is the head's known
 reading of developed open ground (the calibration check found the head over by about 4x on dense built and
 cropland, and the county numbers are not class-corrected). Rate per area favors a small county with one bright
 class; "starts today" favors the big ones (Stevens WA 0.24, Ferry 0.19). Neither is yet the county against

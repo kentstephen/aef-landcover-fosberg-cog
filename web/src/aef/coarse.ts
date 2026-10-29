@@ -4,7 +4,7 @@ import type { Classified } from "./head.js";
  * The coarse reader's workers. Tiles go to a worker by longitude band so neighbors land on the
  * same worker and a file's level is decoded once; each worker keeps its own class planes.
  */
-export type CountyPart = { unit: Uint16Array; hx: Int16Array; hy: Int16Array; sum: Float32Array; n: Uint16Array; pixelKm2: number };
+export type CountyPart = { unit: Uint16Array; hx: Int16Array; hy: Int16Array; hist: Uint8Array; pixelKm2: number };
 type W = { w: Worker; busy: number; waiting: Map<number, { ok: (c: Classified) => void; no: (e: Error) => void }>; counties: Map<number, { ok: (c: CountyPart) => void; no: (e: Error) => void }> };
 const aborted = () => Object.assign(new Error("aborted"), { name: "AbortError" });
 

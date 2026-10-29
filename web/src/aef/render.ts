@@ -90,6 +90,42 @@ uniform sampler2DArray ffwiTex;
 uniform sampler2D lutTex;
 uniform sampler2D rampTex;
 
+const float WX_NAN = intBitsToFloat(0x7fc00000);
+
+/** Catmull-Rom weights for the four samples around a fraction t (at -1, 0, 1, 2). */
+vec4 wxCatmull(float t) {
+  float t2 = t * t;
+  float t3 = t2 * t;
+  return 0.5 * vec4(-t3 + 2.0 * t2 - t, 3.0 * t3 - 5.0 * t2 + 2.0, -3.0 * t3 + 4.0 * t2 + t, t3 - t2);
+}
+
+/**
+ * One layer of the weather texture read bicubically (Catmull-Rom over the 4 x 4 nodes around the point), so a
+ * threshold on the field is a curve, not the facets and diamond corners a bilinear read makes between nodes.
+ * A missing node drops out and the rest are renormalized; with no node, NaN.
+ */
+float wxLayer(vec2 uv, int l) {
+  ivec3 sz = textureSize(ffwiTex, 0);
+  vec2 p = uv * vec2(sz.xy) - 0.5;
+  vec2 p0 = floor(p);
+  vec2 f = p - p0;
+  vec4 wx = wxCatmull(f.x);
+  vec4 wy = wxCatmull(f.y);
+  float acc = 0.0;
+  float wsum = 0.0;
+  for (int j = 0; j < 4; j++) {
+    for (int i = 0; i < 4; i++) {
+      ivec2 q = clamp(ivec2(p0) + ivec2(i - 1, j - 1), ivec2(0), sz.xy - 1);
+      float v = texelFetch(ffwiTex, ivec3(q, l), 0).r;
+      if (isnan(v)) continue;
+      float w = wx[i] * wy[j];
+      acc += w * v;
+      wsum += w;
+    }
+  }
+  return wsum > 0.05 ? acc / wsum : WX_NAN;
+}
+
 /**
  * The weather at a fractional hour: the two hours around it mixed by the fraction, so the field glides between
  * the forecast's hours while playing instead of jumping on the hour. A missing hour yields to the other one.
@@ -98,9 +134,9 @@ float wxAt(vec2 uv, float l) {
   float l0 = floor(l);
   float f = l - l0;
   float depth = float(textureSize(ffwiTex, 0).z);
-  float a = texture(ffwiTex, vec3(uv, l0)).r;
+  float a = wxLayer(uv, int(l0));
   if (f <= 0.0 || l0 + 1.0 >= depth) return a;
-  float b = texture(ffwiTex, vec3(uv, l0 + 1.0)).r;
+  float b = wxLayer(uv, int(l0) + 1);
   if (isnan(a)) return b;
   if (isnan(b)) return a;
   return mix(a, b, f);

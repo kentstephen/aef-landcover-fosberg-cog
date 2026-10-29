@@ -1,7 +1,7 @@
 import { Decompress } from "fzstd";
 import proj4 from "proj4";
 import { cacheGet, cachePut } from "./disk-cache.js";
-import { classify, type Classified, ignLogit, NO_CLASS } from "./head.js";
+import { classify, type Classified, IGN_HI, IGN_LO, NO_CLASS } from "./head.js";
 import { lonLatToHrrrPixel } from "../hrrr/metadata.js";
 import { type AefFile, type AefIndex, FULL_WIDTH, loadAefIndex, NUM_BANDS, RECORD_BYTES } from "./index.js";
 import { AEF_YEAR } from "./mosaic.js";
@@ -270,11 +270,14 @@ async function tile(m: { id: number; z: number; x: number; y: number; level: num
   postMessage({ id: m.id, nlcd, esri, cover, ign }, { transfer: [nlcd.buffer, esri.buffer, cover.buffer, ign.buffer] });
 }
 
+/** The county sums bin the ground logit: BINS bins over IGN_LO..IGN_HI (0.75 logit each). */
+export const COUNTY_BINS = 16;
+
 /**
- * One file's ignition ground summed by county and HRRR pixel at an overview level: for every pixel with
- * ground, exp(ground logit) added to its (county, HRRR pixel) cell, and the pixel counted. The main thread
- * folds the hour's weather in later (mean exp(ground + weather) per county), so the county is the pixel
- * picture averaged. Sparse arrays back: county index, HRRR x, y, sum, count.
+ * One file's ignition ground by county and HRRR pixel at an overview level: for every pixel with ground, a
+ * count in its (county, HRRR pixel) cell's histogram of the ground logit. The main thread folds the hour's
+ * weather in later: the share of the county's pixels over the hide line, and the mean odds. Sparse arrays
+ * back: county index, HRRR x, y, and COUNTY_BINS counts per cell.
  */
 async function county(m: { id: number; fi: number; level: number }) {
   const idx = await (index ??= loadAefIndex(baseUrl));
@@ -284,8 +287,9 @@ async function county(m: { id: number; fi: number; level: number }) {
   const width = pl.width;
   const res = (10 * FULL_WIDTH) / width;
   const c = converter(idx.zones[f.zone]!.epsg);
-  const cells = new Map<number, { u: number; hx: number; hy: number; s: number; n: number }>();
+  const cells = new Map<number, { u: number; hx: number; hy: number; hist: Uint8Array }>();
   const u = units;
+  const binW = (IGN_HI - IGN_LO) / COUNTY_BINS;
   for (let row = 0; row < width; row++) {
     const uy = f.utmSouth + (row + 0.5) * res;
     for (let col = 0; col < width; col++) {
@@ -302,29 +306,28 @@ async function county(m: { id: number; fi: number; level: number }) {
       const key = (unit * 2048 + h.y) * 2048 + h.x;
       let cell = cells.get(key);
       if (!cell) {
-        cell = { u: unit, hx: h.x, hy: h.y, s: 0, n: 0 };
+        cell = { u: unit, hx: h.x, hy: h.y, hist: new Uint8Array(COUNTY_BINS) };
         cells.set(key, cell);
       }
-      cell.s += Math.exp(ignLogit(pl.ign[q]!));
-      cell.n++;
+      // the byte is the logit over IGN_LO..IGN_HI; its bin
+      const bin = Math.min(COUNTY_BINS - 1, Math.floor(((pl.ign[q]! / 255) * (IGN_HI - IGN_LO)) / binW));
+      if (cell.hist[bin]! < 255) cell.hist[bin]!++;
     }
   }
   const k = cells.size;
   const unit = new Uint16Array(k);
   const hx = new Int16Array(k);
   const hy = new Int16Array(k);
-  const sum = new Float32Array(k);
-  const n = new Uint16Array(k);
+  const hist = new Uint8Array(k * COUNTY_BINS);
   let i = 0;
   for (const cell of cells.values()) {
     unit[i] = cell.u;
     hx[i] = cell.hx;
     hy[i] = cell.hy;
-    sum[i] = cell.s;
-    n[i] = cell.n;
+    hist.set(cell.hist, i * COUNTY_BINS);
     i++;
   }
-  postMessage({ id: m.id, county: { unit, hx, hy, sum, n, pixelKm2: (res * res) / 1e6 } }, { transfer: [unit.buffer, hx.buffer, hy.buffer, sum.buffer, n.buffer] });
+  postMessage({ id: m.id, county: { unit, hx, hy, hist, pixelKm2: (res * res) / 1e6 } }, { transfer: [unit.buffer, hx.buffer, hy.buffer, hist.buffer] });
 }
 
 self.onmessage = (ev: MessageEvent<Msg>) => {
