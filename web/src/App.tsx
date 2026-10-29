@@ -43,14 +43,13 @@ const BEFORE_ID = "aeroway-runway";
 /** 100 ms a frame: a week in 17 s. */
 const INITIAL_FRAME_MS = 100;
 /**
- * Opens on the whole country for the Southern Plains outbreak of March 14, 2025: a deep cyclone
- * over the Plains, extreme wind and single-digit humidity from Texas through Oklahoma and Kansas
- * into the Mid-South, the widest fire weather day of the year the 2025 embeddings share. The 12Z
- * run, playing from +0 h, so the afternoon peak comes up over the first frames and the afterglow
- * carries it into the 15th.
+ * Opens on the whole country. The single-run mode opens on the 12Z run of March 12, 2026, the Morrill
+ * Fire's day in the Nebraska Sandhills, playing from +0 h so the afternoon peak comes up over the first
+ * frames and the afterglow carries it into the 13th. (March 14, 2025 12Z is another: the Southern Plains
+ * outbreak, extreme wind and single-digit humidity from Texas into the Mid-South.)
  */
 const START_VIEW = { longitude: -97, latitude: 38, zoom: 4.6 };
-const START_INIT = new Date("2025-03-14T12:00:00Z");
+const START_INIT = new Date("2026-03-12T12:00:00Z");
 const START_LEAD = 0;
 /**
  * The week the map opens on, over the whole country: March 10 to 16, 2026, the Morrill Fire's run across the
