@@ -53,6 +53,10 @@ maps), then the TypeScript map.
   hour's weather term also draws as a gray field under everything (`fieldAlpha`), and the ground holds a past
   hour by land cover (hold hours in `aef/fuel.ts`: grass 3 h, shrub 6, evergreen 24, built 0). Keys: Space,
   F full screen, L basemap labels, Q tooltip. The collapsed card shows the hour and a ramp legend.
+- Calibration check done (`ignition/calibrate.py`, `docs/ignition-calibration.md`): the head ranks pixel-hours well
+  (top 10% hold 62% of WFIGS ignitions) but its rates are off by region and class (Mountain 2.4x and evergreen 2.9x
+  under, cropland and dense built 4x over), since local controls cancel the base rate. Offset -14.84 turns the logit
+  into ignitions per km2 per hour (`models/ignition_calibration.json`). The map is unchanged by it.
 - Next: the same app in a marimo notebook with a Python kernel reading the HRRR analysis (virtual store)
   as another source of days; see `.claude/memory/PLAN_runtime_week.md` Phase B. A calibration plan for the
   head's probabilities is in the handoff (not started).
