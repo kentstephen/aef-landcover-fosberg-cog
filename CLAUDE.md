@@ -36,8 +36,7 @@ maps), then the TypeScript map.
 
 - The map plays a WEEK by default (`web/src/hrrr/week.ts`): one 12Z HRRR run per day, its first 24 hours,
   stitched hour by hour, opening country-wide on March 10 to 16, 2026 over the 2025 embeddings. Shard-days
-  are one queue ranked by the playhead (the view's shards for the day on screen first, then the days after
-  it, then the rest of the country in the background), 4 in flight; play runs over the days in hand and
+  are one queue ranked by the playhead (the day on screen first, then the days after it), 4 in flight; play runs over the days in hand and
   wraps there until the rest arrive; a strip of day cells under the slider shows in / loading / waiting.
   Only the shards under the view are fetched; the week writes nothing to disk (the raw shards are 23 MB
   each; writing a country-wide week put 4 GB in the browser process). Measured cold headless (one tab, all
