@@ -47,8 +47,15 @@ maps), then the TypeScript map.
   model weights; the season mode and its baked shards are gone.
 - Memory probes: `.claude/memory/mem2.py <url> <seconds>` (RSS per Chromium process, heap, the week's
   queue), `.claude/memory/probe_week.py` (days in hand, tiles, tooltip, screenshot).
+- Opens on July 26 to August 1, 2026 (ranked by `ignition/rank_weeks.py`: the head's weather term over a
+  sample of the HRRR analysis, the week with the most area-hours above the gate). Ground ramps: Viridis
+  (default), Magma, Inferno, Solar, Fire (`aef/ramp.ts`, 50 stops each, ends tuned to the dark map). The
+  hour's weather term also draws as a gray field under everything (`fieldAlpha`), and the ground holds a past
+  hour by land cover (hold hours in `aef/fuel.ts`: grass 3 h, shrub 6, evergreen 24, built 0). Keys: Space,
+  F full screen, L basemap labels, Q tooltip. The collapsed card shows the hour and a ramp legend.
 - Next: the same app in a marimo notebook with a Python kernel reading the HRRR analysis (virtual store)
-  as another source of days; see `.claude/memory/PLAN_runtime_week.md` Phase B.
+  as another source of days; see `.claude/memory/PLAN_runtime_week.md` Phase B. A calibration plan for the
+  head's probabilities is in the handoff (not started).
 - Panel: Ignition / Off; the weather field fold, the land cover modes and grain are commented out.
 
 ## Status (2026-10-28, map built, reader rebuilt)
