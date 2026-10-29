@@ -276,7 +276,8 @@ export function ControlPanel(p: ControlPanelProps) {
         Data: <A href="https://source.coop/tge-labs/aef">AlphaEarth Foundations {AEF_YEAR}</A> (tge-labs on Source Cooperative) ·{" "}
         <A href="https://dynamical.org/catalog/noaa-hrrr-forecast-48-hour/">NOAA HRRR 48 h</A> via{" "}
         <A href="https://dynamical.org">dynamical.org</A> ({s.backend === "icechunk" ? "Icechunk" : s.backend === "zarr-v3" ? "Zarr v3" : "opening"}) ·{" "}
-        <A href="https://www.frames.gov/catalog/27085">Fosberg 1978</A> · <A href="https://data-nifc.opendata.arcgis.com/">NIFC WFIGS</A> ignitions and perimeters
+        <A href="https://www.frames.gov/catalog/27085">Fosberg 1978</A> · <A href="https://data-nifc.opendata.arcgis.com/">NIFC WFIGS</A> ignitions and perimeters ·{" "}
+        <A href="https://github.com/kentstephen/aef-landcover-fosberg-cog">code on GitHub</A>
       </p>
 
       {loading ? (
