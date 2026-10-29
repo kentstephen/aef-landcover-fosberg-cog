@@ -279,6 +279,10 @@ export function ControlPanel(p: ControlPanelProps) {
         <A href="https://www.frames.gov/catalog/27085">Fosberg 1978</A> · <A href="https://data-nifc.opendata.arcgis.com/">NIFC WFIGS</A> ignitions and perimeters ·{" "}
         <A href="https://github.com/kentstephen/aef-landcover-fosberg-cog">code on GitHub</A>
       </p>
+      <p className="muted small" style={{ marginTop: 4 }}>
+        Keys: <b>Space</b> plays and pauses · <b>G</b> switches the ground between pixels and counties · <b>F</b> full screen ·{" "}
+        <b>L</b> map labels off and on · <b>Q</b> tooltip off and on.
+      </p>
 
       {loading ? (
         <div className="field" style={{ marginTop: 8 }}>
@@ -302,7 +306,7 @@ export function ControlPanel(p: ControlPanelProps) {
             onChange={p.onFuelChange}
           />
           <Help label="The ground">
-            Every pixel's 64-band AlphaEarth embedding goes through a linear head (fit offline against the 2024 land cover maps,
+            G switches between the pixels and the counties. Every pixel's 64-band AlphaEarth embedding goes through a linear head (fit offline against the 2024 land cover maps,
             held-out accuracy 0.87 to 0.92 for Esri, 0.64 to 0.92 for NLCD) to a class. Lit: the hour's FFWI times the class's
             fuel weight, hidden below the hide line, viridis from there to the ramp top. Zoomed out the embeddings come from
             the COG overviews (each overview pixel is the centroid of its children; one byte range per file and
@@ -595,7 +599,7 @@ export function ControlPanel(p: ControlPanelProps) {
             </div>
             <Field label={<span>Day {Math.floor(p.hourIdx / HOURS_PER_DAY) + 1} · {p.weekHourLabel} (+{p.hourIdx % HOURS_PER_DAY} h into that day's run)</span>}>
               <div className="row" style={{ flexWrap: "nowrap" }}>
-                <button type="button" className="play" aria-label={p.isPlaying ? "Pause" : "Play"} onClick={(e) => { p.onPlayPauseToggle(); e.currentTarget.blur(); }}>
+                <button type="button" className="play" aria-label={p.isPlaying ? "Pause" : "Play"} title={p.isPlaying ? "Pause (Space)" : "Play (Space)"} onClick={(e) => { p.onPlayPauseToggle(); e.currentTarget.blur(); }}>
                   {p.isPlaying ? "❚❚" : "▶"}
                 </button>
                 <Slider min={0} max={Math.max(0, p.weekDepth - 1)} step={1} value={p.hourIdx} onChange={p.onHourIdxChange} label="Week hour" onReset={() => p.onHourIdxChange(0)} />
@@ -633,7 +637,7 @@ export function ControlPanel(p: ControlPanelProps) {
           }
         >
           <div className="row" style={{ flexWrap: "nowrap" }}>
-            <button type="button" className="play" aria-label={p.isPlaying ? "Pause" : "Play"} onClick={(e) => { p.onPlayPauseToggle(); e.currentTarget.blur(); }}>
+            <button type="button" className="play" aria-label={p.isPlaying ? "Pause" : "Play"} title={p.isPlaying ? "Pause (Space)" : "Play (Space)"} onClick={(e) => { p.onPlayPauseToggle(); e.currentTarget.blur(); }}>
               {p.isPlaying ? "❚❚" : "▶"}
             </button>
             <Slider min={0} max={HRRR_LEAD_TIME_COUNT - 1} step={1} value={p.leadTimeIdx} onChange={p.onLeadTimeIdxChange} label="Forecast hour" onReset={() => p.onLeadTimeIdxChange(0)} />
@@ -708,8 +712,6 @@ export function ControlPanel(p: ControlPanelProps) {
       */}
 
       {s.error ? <p className="warn small" style={{ marginTop: 8 }}>{s.error}</p> : null}
-
-      <p className="muted small" style={{ marginTop: 8 }}>Keys: Space plays and pauses, G switches the ground between pixels and counties, F is full screen, L hides and shows the map labels, Q turns the tooltip off and on.</p>
 
       <div className="pn-foot">
         <span>Built with <A href="https://github.com/developmentseed/deck.gl-raster">deck.gl-raster</A> by <A href="https://developmentseed.org">Development Seed</A></span>
