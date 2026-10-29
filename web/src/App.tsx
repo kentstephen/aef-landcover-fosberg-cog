@@ -33,7 +33,6 @@ import { openHrrr, type HrrrSource } from "./hrrr/store.js";
 import { FfwiTileCache } from "./hrrr/tile-cache.js";
 import { RASTER_VARIABLES, type RasterVariable } from "./hrrr/variables.js";
 import { HOURS_PER_DAY, WeekWeather, weekHourDate, type WeekSpec } from "./hrrr/week.js";
-import { loadSeason, SeasonWeather } from "./hrrr/season.js";
 import { cacheSource } from "./aef/weather.js";
 import { DeckGlOverlay } from "./lib/deckgl-overlay.js";
 import { ControlPanel, loadingSummary, type ColormapChoiceId, type FuelChoice, type IgnScale, type Status, type TimeMode } from "./ui/ControlPanel.js";
@@ -41,7 +40,7 @@ import { ControlPanel, loadingSummary, type ColormapChoiceId, type FuelChoice, t
 const MAP_STYLE_URL = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 /** First basemap layer above water in CARTO styles; data goes under roads/labels. */
 const BEFORE_ID = "aeroway-runway";
-/** 100 ms a frame: the 269-day season in 27 s, a week in 17 s. */
+/** 100 ms a frame: a week in 17 s. */
 const INITIAL_FRAME_MS = 100;
 /**
  * Opens on the whole country for the Southern Plains outbreak of March 14, 2025: a deep cyclone
@@ -54,18 +53,13 @@ const START_VIEW = { longitude: -97, latitude: 38, zoom: 4.6 };
 const START_INIT = new Date("2025-03-14T12:00:00Z");
 const START_LEAD = 0;
 /**
- * The week the map opens on, over the whole country: March 11 to 17, 2025. A deep cyclone crosses the Plains
- * on the 14th with extreme wind and single-digit humidity from Texas through Oklahoma and Kansas into the
- * Mid-South, the widest fire weather day of the year, with the days before and after around it. The ground
- * is the 2024 embeddings. (Another good week: January 5 to 11, 2025, over Southern California, the Palisades
- * and Eaton fires on the 7th.)
+ * The week the map opens on, over the whole country: March 10 to 16, 2026, the Morrill Fire's run across the
+ * Nebraska Sandhills on the 12th and the Plains wind around it. The ground is the 2025 embeddings. (Other good
+ * weeks: March 11 to 17, 2025, the Southern Plains outbreak on the 14th; January 5 to 11, 2025, over Southern
+ * California, the Palisades and Eaton fires on the 7th.)
  */
 const START_WEEK = new Date("2026-03-10T00:00:00Z");
 const START_DAYS = 7;
-/** The season on the site (web/public/season-<year>/, from ignition/fetch_season.py); the map opens on it. */
-const SEASON_YEAR = 2026;
-/** The day the season opens on: March 12, 2026, the Morrill Fire's run across the Nebraska Sandhills. */
-const START_DAY = new Date("2026-03-12T06:00:00Z");
 /** Terrain under the ground: AWS Terrain Tiles (Mapzen Terrarium), public, 256 px, to zoom 15. */
 const DEM_TILES = "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 const HILLSHADE_ID = "aef-hillshade";
@@ -175,7 +169,9 @@ export default function App() {
   }, [aefIndex, mosaic]);
 
   // ---- animation
-  const timeModeRef = useRef<TimeMode>("season");
+  const timeModeRef = useRef<TimeMode>("week");
+  /** Week mode: the hour after this one for the play loop (skips days not yet in hand). */
+  const nextHourRef = useRef<(h: number) => number>((h) => (h + 1) % depthRef.current);
   const depthRef = useRef(START_DAYS * HOURS_PER_DAY);
   const [leadTimeIdx, setLeadTimeIdx] = useState(START_LEAD);
   const [isPlaying, setIsPlaying] = useState(true);
@@ -186,8 +182,7 @@ export default function App() {
     let last = performance.now();
     const loop = (now: number) => {
       if (now - last >= frameDurationMs) {
-        if (timeModeRef.current === "season") setDayIdx((i) => (i + 1) % depthRef.current);
-        else if (timeModeRef.current === "week") setHourIdx((i) => (i + 1) % depthRef.current);
+        if (timeModeRef.current === "week") setHourIdx((i) => nextHourRef.current(i));
         else setLeadTimeIdx((i) => (i + 1) % HRRR_LEAD_TIME_COUNT);
         last = now;
       }
@@ -314,7 +309,7 @@ export default function App() {
   }, [initTimeIdx, windMode]);
 
   // ---- time: one 48 h run, or a week of 12Z runs stitched hour by hour
-  const [timeMode, setTimeMode] = useState<TimeMode>("season");
+  const [timeMode, setTimeMode] = useState<TimeMode>("week");
   const [weekStart, setWeekStart] = useState<Date>(START_WEEK);
   const [weekDays, setWeekDays] = useState(START_DAYS);
   const [hourIdx, setHourIdx] = useState(0);
@@ -328,56 +323,29 @@ export default function App() {
     w.listeners.add(l);
     setWeek(w);
     setHourIdx((h) => Math.min(h, w.depth - 1));
-    needWeatherRef.current = (px, py) => void w.ensure(px, py);
+    nextHourRef.current = (h) => w.nextHour(h);
+    needWeatherRef.current = (px, py) => w.ensure(px, py);
     // tiles already on hand (a switch from the run, or another week): their shards for this week
     const live = aefLayersRef.current?.live;
-    if (live) for (const t of live.values()) void w.ensure(t.grid.px, t.grid.py);
+    if (live) w.setView(Array.from(live.values(), (t) => t.grid));
     return () => {
       needWeatherRef.current = () => {};
+      nextHourRef.current = (h) => (h + 1) % depthRef.current;
       w.listeners.delete(l);
       w.abort();
       setWeek(null);
     };
   }, [source, timeMode, weekSpec, windMode]);
-
-  // ---- the season: one frame per day, precomputed, fetched per shard as the tiles ask
-  const [season, setSeason] = useState<SeasonWeather | null>(null);
-  const [seasonMissing, setSeasonMissing] = useState(false);
-  const [seasonVersion, setSeasonVersion] = useState(0);
-  const [dayIdx, setDayIdx] = useState(0);
+  // the playhead moved: its day goes first in the week's queue
   useEffect(() => {
-    let gone = false;
-    loadSeason(import.meta.env.BASE_URL, SEASON_YEAR)
-      .then((sw) => {
-        if (gone) return;
-        if (!sw) {
-          setSeasonMissing(true);
-          return;
-        }
-        setSeason(sw);
-        const d0 = Math.round((START_DAY.getTime() - sw.dayDate(0).getTime()) / 864e5);
-        setDayIdx(Math.max(0, Math.min(sw.depth - 1, d0)));
-      })
-      .catch(() => { if (!gone) setSeasonMissing(true); });
-    return () => { gone = true; };
-  }, []);
+    week?.focus(hourIdx);
+  }, [week, hourIdx]);
+  // the view moved: the shards under the tiles on screen are the view (first in the queue, the loading bar)
   useEffect(() => {
-    if (!season) return;
-    const l = () => setSeasonVersion(season.version);
-    season.listeners.add(l);
-    return () => { season.listeners.delete(l); };
-  }, [season]);
-  useEffect(() => {
-    if (!season || timeMode !== "season") return;
-    needWeatherRef.current = (px, py) => void season.ensure(px, py);
     const live = aefLayersRef.current?.live;
-    if (live) for (const t of live.values()) void season.ensure(t.grid.px, t.grid.py);
-    return () => { needWeatherRef.current = () => {}; };
-  }, [season, timeMode]);
-  // the season is not on the site: fall back to the week
-  useEffect(() => {
-    if (seasonMissing && timeMode === "season") setTimeMode("week");
-  }, [seasonMissing, timeMode]);
+    if (week && live) week.setView(Array.from(live.values(), (t) => t.grid));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [week, view, aefVersion]);
 
   // The ground needs the forecast under every tile it holds, whether or not the field is drawn:
   // a side channel fetches the shards the tiles ask for (it skips cached shards).
@@ -395,16 +363,16 @@ export default function App() {
   // The weather changed: every tile's weather texture anew.
   useEffect(() => {
     aefLayers?.refreshWeather();
-  }, [aefLayers, cacheVersion, weekVersion, seasonVersion]);
-  /** The layer of the weather texture on screen: the lead hour of the run, the hour of the week, or the day of the season. */
-  const timeIdx = timeMode === "season" ? dayIdx : timeMode === "week" ? hourIdx : leadTimeIdx;
-  const timeDepth = timeMode === "season" ? (season?.depth ?? 1) : timeMode === "week" ? weekDays * HOURS_PER_DAY : HRRR_LEAD_TIME_COUNT;
+  }, [aefLayers, cacheVersion, weekVersion]);
+  /** The layer of the weather texture on screen: the lead hour of the run or the hour of the week. */
+  const timeIdx = timeMode === "week" ? hourIdx : leadTimeIdx;
+  const timeDepth = timeMode === "week" ? weekDays * HOURS_PER_DAY : HRRR_LEAD_TIME_COUNT;
   /** Where the tiles' weather textures read from, and a key that changes when that does. */
   const runSource = useMemo(() => cacheSource(cacheRef.current, fuel === "ignition" ? "ignition" : "ffwi"), [fuel]);
-  const weatherSrc = timeMode === "season" && season ? season : timeMode === "week" && week ? week : runSource;
+  const weatherSrc = timeMode === "week" && week ? week : runSource;
   timeModeRef.current = timeMode;
   depthRef.current = timeDepth;
-  const weatherKey = timeMode === "season" && season ? `season|${season.id}` : timeMode === "week" && week ? `week|${week.id}` : `${fuel === "ignition" ? "ignition" : "ffwi"}|run`;
+  const weatherKey = timeMode === "week" && week ? `week|${week.id}` : `${fuel === "ignition" ? "ignition" : "ffwi"}|run`;
 
   // ---- hover: lon/lat -> class under the cursor and FFWI at the HRRR pixel
   const [hover, setHover] = useState<{ lon: number; lat: number; x: number; y: number } | null>(null);
@@ -412,26 +380,23 @@ export default function App() {
     if (!hover) return null;
     const px = lonLatToHrrrPixel(hover.lon, hover.lat);
     const inWeek = timeMode === "week";
-    const inSeason = timeMode === "season";
-    const wx = px && !inWeek && !inSeason ? cacheRef.current.sample(px.x, px.y, leadTimeIdx) : null;
+    const wx = px && !inWeek ? cacheRef.current.sample(px.x, px.y, leadTimeIdx) : null;
     const ground = aefLayers?.at(hover.lon, hover.lat) ?? null;
     const ci = ground ? (teacher === "nlcd" ? ground.nlcd : ground.esri) : NO_CLASS;
     const className = ci === NO_CLASS ? null : HEADS[teacher].names[ci]!;
     const weight = ci === NO_CLASS ? 0 : fuelOf(teacher, ci);
-    const ffwi = inSeason ? NaN : inWeek ? (px && week ? week.ffwiAt(px.x, px.y, hourIdx) : NaN) : (wx?.ffwi ?? NaN);
+    const ffwi = inWeek ? (px && week ? week.ffwiAt(px.x, px.y, hourIdx) : NaN) : (wx?.ffwi ?? NaN);
     const wl = px
-      ? inSeason
-        ? (season ? season.termAt(px.x, px.y, dayIdx) : NaN)
-        : inWeek
-          ? (week ? week.termAt(px.x, px.y, hourIdx) : NaN)
-          : cacheRef.current.ignitionAt(px.x, px.y, leadTimeIdx)
+      ? inWeek
+        ? (week ? week.termAt(px.x, px.y, hourIdx) : NaN)
+        : cacheRef.current.ignitionAt(px.x, px.y, leadTimeIdx)
       : NaN;
     const wx0 = wl;
     const ignP = ground && Number.isFinite(wl) ? 1 / (1 + Math.exp(-(ground.ign + wl))) : NaN;
     const groundP = ground ? 1 / (1 + Math.exp(-ground.ign)) : NaN;
     return { wx, ffwi, ground, className, weight, lit: Number.isFinite(ffwi) ? ffwi * weight : NaN, ignP, groundP, wx0 };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [hover, leadTimeIdx, hourIdx, dayIdx, timeMode, week, season, cacheVersion, weekVersion, seasonVersion, aefLayers, aefVersion, teacher]);
+  }, [hover, leadTimeIdx, hourIdx, timeMode, week, cacheVersion, weekVersion, aefLayers, aefVersion, teacher]);
 
   // ---- the rank scale: the view's quantiles of the logit this hour set the logit ramp
   const rankRamp = useMemo<[number, number] | null>(() => {
@@ -513,8 +478,7 @@ export default function App() {
           useWeather,
           standingAlpha,
           wxGate,
-          // the afterglow counts layers back: hours of a run or a week; over days it would smear the season
-          glowHours: timeMode === "season" ? 0 : glowHours,
+          glowHours,
           grain,
           light,
           opacity: fuelOpacity,
@@ -558,8 +522,10 @@ export default function App() {
     aefIndexReady: aefIndex !== null && mosaic !== null,
     aefReading: aefLayers?.work.reading ?? 0,
     aefDone: aefLayers?.work.done ?? 0,
-    weekDone: timeMode === "season" && season ? season.progress.done : timeMode === "week" && week ? week.progress.done : 0,
-    weekWanted: timeMode === "season" && season ? season.progress.wanted : timeMode === "week" && week ? week.progress.wanted : 0,
+    weekDone: timeMode === "week" && week ? week.progress.done : 0,
+    weekWanted: timeMode === "week" && week ? week.progress.wanted : 0,
+    weekDaysIn: timeMode === "week" && week ? week.daysReady() : 0,
+    weekDaysTotal: timeMode === "week" ? weekDays : 0,
     error,
   };
   const loading = loadingSummary(status);
@@ -581,7 +547,6 @@ export default function App() {
 
   const runLabel = source ? dateFromInitTimeIdx(initTimeIdx).toISOString().slice(0, 13).replace("T", " ") + "Z" : "";
   const weekHourLabel = weekHourDate(weekSpec, hourIdx).toISOString().slice(0, 13).replace("T", " ") + "Z";
-  const seasonDayLabel = season ? season.dayDate(dayIdx).toISOString().slice(0, 10) : "";
 
   return (
     <div style={{ position: "relative", width: "100%", height: "100%" }}>
@@ -658,12 +623,7 @@ export default function App() {
         onHourIdxChange={setHourIdx}
         weekDepth={timeMode === "week" ? timeDepth : weekDays * HOURS_PER_DAY}
         weekHourLabel={weekHourLabel}
-        seasonYear={SEASON_YEAR}
-        seasonDays={season?.depth ?? 0}
-        seasonMissing={seasonMissing}
-        dayIdx={dayIdx}
-        onDayIdxChange={setDayIdx}
-        seasonDayLabel={seasonDayLabel}
+        weekDayStates={timeMode === "week" && week ? week.dayStates() : []}
         fuel={fuel}
         onFuelChange={setFuel}
         pHide={pHide}
@@ -739,14 +699,12 @@ export default function App() {
               ? `FFWI ${hoverInfo.wx.ffwi.toFixed(0)} · wind ${hoverInfo.wx.windMph} mph · RH ${hoverInfo.wx.rh}% · ${hoverInfo.wx.tc} °C`
               : Number.isFinite(hoverInfo.ffwi)
                 ? `FFWI ${hoverInfo.ffwi.toFixed(0)}`
-                : timeMode === "season"
-                  ? (Number.isFinite(hoverInfo.wx0) ? "the day's worst hour of the weather term" : "season not loaded here yet")
-                  : "forecast not loaded here yet"}
+                : "forecast not loaded here yet"}
             {tauHours > 0 ? ` (fuel lag ${tauHours} h)` : ""}
           </div>
           <div style={{ color: "#aaa" }}>
             {hover.lat.toFixed(3)}, {hover.lon.toFixed(3)} ·{" "}
-            {timeMode === "season" ? `${seasonDayLabel}, the day's worst hour` : timeMode === "week" ? `${weekHourLabel} (12Z run, +${hourIdx % HOURS_PER_DAY} h)` : `${runLabel} +${leadTimeIdx} h`}
+            {timeMode === "week" ? `${weekHourLabel} (12Z run, +${hourIdx % HOURS_PER_DAY} h)` : `${runLabel} +${leadTimeIdx} h`}
           </div>
         </div>
       ) : null}

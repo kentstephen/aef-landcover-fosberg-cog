@@ -124,3 +124,12 @@
 .legend { display: grid; grid-template-columns: 12px 1fr auto; gap: 3px 8px; align-items: center; font-size: 11.5px; }
 .legend-row { display: contents; }
 .legend .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+
+/* the week's days under the slider: in hand (bright), loading (pulsing), waiting (dim), not in the store (struck) */
+.days { display: flex; gap: 3px; margin: 4px 0 6px; }
+.day { flex: 1 1 0; height: 18px; border-radius: 3px; border: 1px solid var(--line); background: rgba(255, 255, 255, 0.06); color: rgba(255, 255, 255, 0.45); font: inherit; font-size: 10px; cursor: pointer; padding: 0; }
+.day.in { background: rgba(255, 255, 255, 0.28); color: #fff; }
+.day.loading { background: rgba(255, 255, 255, 0.14); color: #fff; animation: day-pulse 1.2s ease-in-out infinite; }
+.day.none { text-decoration: line-through; cursor: default; opacity: 0.5; }
+.day.on { outline: 2px solid var(--warm); outline-offset: -1px; }
+@keyframes day-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }

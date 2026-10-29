@@ -17,7 +17,7 @@ import {
 } from "../hrrr/metadata.js";
 import { type RasterVariable } from "../hrrr/variables.js";
 // import { RASTER_VARIABLES, windLabel } from "../hrrr/variables.js";
-import { HOURS_PER_DAY } from "../hrrr/week.js";
+import { HOURS_PER_DAY, type DayState } from "../hrrr/week.js";
 import { A, Check, Field, Fold, Help, Seg, Slider } from "./controls.js";
 // import { Ramp } from "./controls.js";
 import "./panel.css";
@@ -43,7 +43,7 @@ export type FuelChoice = "ignition" | "lit" | "cover" | "off";
 /** How the ignition head meets the ramp. */
 export type IgnScale = "probability" | "logit" | "rank";
 /** The time axis: one 48 h forecast run, or a week of daily 12Z runs stitched hour by hour. */
-export type TimeMode = "run" | "week" | "season";
+export type TimeMode = "run" | "week";
 
 export type Status = {
   backend: "icechunk" | "zarr-v3" | null;
@@ -55,6 +55,9 @@ export type Status = {
   /** Week mode: shard-days in hand and asked for. */
   weekDone: number;
   weekWanted: number;
+  /** Week mode: days whose shards under the view are all in hand, of the days asked for. */
+  weekDaysIn: number;
+  weekDaysTotal: number;
   error: string | null;
 };
 
@@ -82,7 +85,7 @@ export function loadingSummary(s: Status): { fraction: number; label: string } |
   if (s.weekWanted > s.weekDone) {
     total += s.weekWanted;
     done += s.weekDone;
-    parts.push(`weather ${s.weekDone} / ${s.weekWanted} shards`);
+    parts.push(s.weekDaysTotal > 0 ? `weather: day ${Math.min(s.weekDaysIn + 1, s.weekDaysTotal)} of ${s.weekDaysTotal} under the view (${s.weekDone} / ${s.weekWanted} shards)` : `weather ${s.weekDone} / ${s.weekWanted} shards`);
   }
   if (parts.length === 0) return null;
   return { fraction: total > 0 ? done / total : 0, label: `Loading ${parts.join(" · ")}` };
@@ -109,13 +112,8 @@ export type ControlPanelProps = {
   onHourIdxChange: (h: number) => void;
   weekDepth: number;
   weekHourLabel: string;
-  /** The season on the site: its year, days (0 = not loaded), the day on screen and its date. */
-  seasonYear: number;
-  seasonDays: number;
-  seasonMissing: boolean;
-  dayIdx: number;
-  onDayIdxChange: (d: number) => void;
-  seasonDayLabel: string;
+  /** Week mode: each day's state under the view (in hand, loading, waiting, not in the store). */
+  weekDayStates: DayState[];
 
   fuel: FuelChoice;
   onFuelChange: (f: FuelChoice) => void;
@@ -197,7 +195,7 @@ export function ControlPanel(p: ControlPanelProps) {
   const reader = p.zoom >= MOSAIC_MIN_ZOOM ? "10 m mosaic" : "COG overviews";
   const weekEnd = new Date(p.weekStart.getTime());
   weekEnd.setUTCDate(weekEnd.getUTCDate() + p.weekDays - 1);
-  const timeTag = p.timeMode === "season" ? p.seasonDayLabel : p.timeMode === "week" ? p.weekHourLabel : `+${hours} h · ${validStr}`;
+  const timeTag = p.timeMode === "week" ? p.weekHourLabel : `+${hours} h · ${validStr}`;
   // the HRRR field fold is commented out below
   // const rv = RASTER_VARIABLES[p.rasterVariable];
   // const field = p.showRaster ? p.rasterVariable : "nothing";
@@ -226,9 +224,9 @@ export function ControlPanel(p: ControlPanelProps) {
       <p>
         Every pixel's <b>AlphaEarth embedding</b> goes through a small head fit on 22,000 real wildfire ignitions (WFIGS, 2019
         to 2026) against points 20 to 30 km away at other hours, together with the hour's weather from NOAA's HRRR
-        forecast (Fosberg index, temperature, humidity, wind). The map plays the head's ignition probability day by day
-        over the {p.seasonYear} season, hour by hour over a week of daily forecasts, or over one 48 h run: the ground in
-        gray all the time, in color where the weather lifts it.
+        forecast (Fosberg index, temperature, humidity, wind). The map plays the head's ignition probability
+        hour by hour over a week of daily forecasts, or over one 48 h run: the ground in gray all the time, in color where
+        the weather lifts it.
       </p>
       <p className="muted small" style={{ marginTop: 6 }}>
         Data: <A href="https://source.coop/tge-labs/aef">AlphaEarth Foundations {AEF_YEAR}</A> (tge-labs on Source Cooperative) ·{" "}
@@ -361,9 +359,6 @@ export function ControlPanel(p: ControlPanelProps) {
         <Field label={`Opacity ${Math.round(p.fuelOpacity * 100)}%`}>
           <Slider min={0.05} max={1} step={0.05} value={p.fuelOpacity} onChange={p.onFuelOpacityChange} label="Ground opacity" onReset={() => p.onFuelOpacityChange(0.9)} />
         </Field>
-        {p.timeMode === "season" ? (
-          <p className="muted small">Afterglow: off over the season (each day stands alone).</p>
-        ) : (
         <Field
           label={
             <span className="row">
@@ -378,7 +373,6 @@ export function ControlPanel(p: ControlPanelProps) {
         >
           <Slider min={0} max={48} step={1} value={p.glowHours} onChange={p.onGlowHoursChange} label="Afterglow hours" onReset={() => p.onGlowHoursChange(24)} />
         </Field>
-        )}
         {/* grain (the fill broken into cells): off, not offered
         <Field label={p.grain === 0 ? "Grain: off (flat fill)" : `Grain: ${p.grain} cells across a tile`}>
           <Slider min={0} max={128} step={8} value={p.grain} onChange={p.onGrainChange} label="Grain" onReset={() => p.onGrainChange(0)} />
@@ -407,43 +401,20 @@ export function ControlPanel(p: ControlPanelProps) {
           <Seg
             value={p.timeMode}
             options={[
-              { id: "season", label: `The ${p.seasonYear} season` },
               { id: "week", label: "A week" },
               { id: "run", label: "One 48 h run" },
             ]}
             onChange={p.onTimeModeChange}
           />
           <Help label="Time">
-            The season: one frame per day, February to the end of October, each pixel at its day's worst hour (06Z to 06Z)
-            of the weather term, from the HRRR analysis (what happened, not a forecast), precomputed once (about 4 MB per
-            800 km shard for the whole season, fetched as the view asks). A week: one 12Z HRRR run per day, its first 24
-            hours each, stitched into one hourly film (about 18 MB per shard per day; a week over the country is about 3 GB
-            cold, kept on disk after). One run: the 49 hours of a single forecast.
+            A week: one 12Z HRRR run per day, its first 24 hours each, stitched into one hourly film, fetched as you watch:
+            the day on screen first, then the days after it, then the rest of the country in the background so panning is
+            warm. Play runs over the days in hand and wraps there until the rest arrive; the strip under the slider shows
+            which days are in. About 18 MB per shard per day over the wire (kept on disk after); a week over the whole
+            country is about 3 GB the first time and 640 MB in memory. One run: the 49 hours of a single forecast.
           </Help>
         </div>
-        {p.timeMode === "season" ? (
-          <>
-            {p.seasonMissing ? (
-              <p className="warn small">The season is not on the site (run ignition/fetch_season.py, then --assemble).</p>
-            ) : p.seasonDays === 0 ? (
-              <p className="muted small">Opening the season...</p>
-            ) : (
-              <>
-                <Field label={<span>Day {p.dayIdx + 1} of {p.seasonDays} · {p.seasonDayLabel} (the day's worst hour, 06Z to 06Z)</span>}>
-                  <div className="row" style={{ flexWrap: "nowrap" }}>
-                    <button type="button" className="play" aria-label={p.isPlaying ? "Pause" : "Play"} onClick={(e) => { p.onPlayPauseToggle(); e.currentTarget.blur(); }}>
-                      {p.isPlaying ? "❚❚" : "▶"}
-                    </button>
-                    <Slider min={0} max={p.seasonDays - 1} step={1} value={p.dayIdx} onChange={p.onDayIdxChange} label="Season day" onReset={() => p.onDayIdxChange(0)} />
-                  </div>
-                </Field>
-                <Field label={`Seconds per day: ${(p.frameDurationMs / 1000).toFixed(2)} (the season in ${Math.round((p.frameDurationMs * p.seasonDays) / 1000)} s)`}>
-                  <Slider min={40} max={1000} step={20} value={p.frameDurationMs} onChange={p.onFrameDurationMsChange} label="Frame duration" onReset={() => p.onFrameDurationMsChange(100)} />
-                </Field>
-              </>
-            )}
-          </>
-        ) : p.timeMode === "week" ? (
+        {p.timeMode === "week" ? (
           <>
             <Field label={`Days (UTC): ${isoDateString(p.weekStart)} to ${isoDateString(weekEnd)}, ${p.weekDays} day${p.weekDays === 1 ? "" : "s"}`}>
               <div className="row">
@@ -458,6 +429,28 @@ export function ControlPanel(p: ControlPanelProps) {
                 <Slider min={1} max={14} step={1} value={p.weekDays} onChange={p.onWeekDaysChange} label="Days" onReset={() => p.onWeekDaysChange(7)} />
               </div>
             </Field>
+            <div className="days" role="list" aria-label="Days of the week in hand">
+              {Array.from({ length: p.weekDays }, (_, d) => {
+                const st = p.weekDayStates[d] ?? "waiting";
+                const date = new Date(p.weekStart.getTime());
+                date.setUTCDate(date.getUTCDate() + d);
+                const on = Math.floor(p.hourIdx / HOURS_PER_DAY) === d;
+                const word = st === "in" ? "in hand" : st === "loading" ? "loading" : st === "none" ? "not in the store" : "waiting";
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    role="listitem"
+                    className={`day ${st}${on ? " on" : ""}`}
+                    title={`${isoDateString(date)}: ${word}`}
+                    aria-label={`Day ${d + 1}, ${isoDateString(date)}, ${word}`}
+                    onClick={(e) => { p.onHourIdxChange(d * HOURS_PER_DAY); e.currentTarget.blur(); }}
+                  >
+                    {date.getUTCDate()}
+                  </button>
+                );
+              })}
+            </div>
             <Field label={<span>Day {Math.floor(p.hourIdx / HOURS_PER_DAY) + 1} · {p.weekHourLabel} (+{p.hourIdx % HOURS_PER_DAY} h into that day's run)</span>}>
               <div className="row" style={{ flexWrap: "nowrap" }}>
                 <button type="button" className="play" aria-label={p.isPlaying ? "Pause" : "Play"} onClick={(e) => { p.onPlayPauseToggle(); e.currentTarget.blur(); }}>

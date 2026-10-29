@@ -32,11 +32,18 @@ weights; static site.
 Order of work: Python first (the model, checked by looking at its land cover
 maps), then the TypeScript map.
 
-## Status (2026-10-28, week mode)
+## Status (2026-10-28, streaming week)
 
-- The map plays a WEEK by default: one 12Z HRRR run per day, its first 24 hours, stitched hour by hour
-  (`web/src/hrrr/week.ts`), opening on Los Angeles for January 5 to 11, 2025. The 48 h single run is the
-  other time mode. Season playback is not built (the analysis store is time-chunked; see HANDOFF.md).
+- The map plays a WEEK by default (`web/src/hrrr/week.ts`): one 12Z HRRR run per day, its first 24 hours,
+  stitched hour by hour, opening country-wide on March 10 to 16, 2026 over the 2025 embeddings. Shard-days
+  are one queue ranked by the playhead (the view's shards for the day on screen first, then the days after
+  it, then the rest of the country in the background), 4 in flight; play runs over the days in hand and
+  wraps there until the rest arrive; a strip of day cells under the slider shows in / loading / waiting.
+  Measured cold headless: a region (Oklahoma, zoom 6.8) first day in 3 s, all in 15 s; country-wide first
+  day in 3 s, all in 77 s (was 216 to 284 s with serialized fetches). The 48 h single run is the other time
+  mode. Nothing is precomputed but the model weights; the season mode and its baked shards are gone.
+- Next: the same app in a marimo notebook with a Python kernel reading the HRRR analysis (virtual store)
+  as another source of days; see `.claude/memory/PLAN_runtime_week.md` Phase B.
 - Panel: Ignition / Off; the weather field fold, the land cover modes and grain are commented out.
 
 ## Status (2026-10-28, map built, reader rebuilt)
