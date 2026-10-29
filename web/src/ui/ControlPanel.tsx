@@ -280,10 +280,10 @@ export function ControlPanel(p: ControlPanelProps) {
             options={[
               { id: "ignition", label: "Ignition" },
               { id: "counties", label: "Counties" },
-              // the land cover lit by FFWI x fuel weight, and the classes themselves: not shown; the picture is the ignition head
+              // the land cover lit by FFWI x fuel weight, the classes themselves, and off: not offered; G toggles the two
               // { id: "lit", label: "Lit by FFWI" },
               // { id: "cover", label: "Land cover" },
-              { id: "off", label: "Off" },
+              // { id: "off", label: "Off" },
             ]}
             onChange={p.onFuelChange}
           />
@@ -683,7 +683,7 @@ export function ControlPanel(p: ControlPanelProps) {
 
       {s.error ? <p className="warn small" style={{ marginTop: 8 }}>{s.error}</p> : null}
 
-      <p className="muted small" style={{ marginTop: 8 }}>Keys: Space plays and pauses, F is full screen, L hides and shows the map labels, Q turns the tooltip off and on.</p>
+      <p className="muted small" style={{ marginTop: 8 }}>Keys: Space plays and pauses, G switches the ground between pixels and counties, F is full screen, L hides and shows the map labels, Q turns the tooltip off and on.</p>
 
       <div className="pn-foot">
         <span>Built with <A href="https://github.com/developmentseed/deck.gl-raster">deck.gl-raster</A> by <A href="https://developmentseed.org">Development Seed</A></span>

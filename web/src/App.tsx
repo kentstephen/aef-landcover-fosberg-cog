@@ -212,13 +212,15 @@ export default function App() {
       const full = e.key === "f" || e.key === "F";
       const labels = e.key === "l" || e.key === "L";
       const pick = e.key === "q" || e.key === "Q";
-      if (!space && !full && !labels && !pick) return;
+      const ground = e.key === "g" || e.key === "G";
+      if (!space && !full && !labels && !pick && !ground) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       const el = e.target as HTMLElement | null;
       const tag = el?.tagName;
       if (tag === "INPUT" || tag === "TEXTAREA" || tag === "BUTTON" || tag === "SELECT" || el?.isContentEditable) return;
       e.preventDefault();
       if (space) setIsPlaying((p) => !p);
+      else if (ground) setFuelState((f) => (f === "counties" ? "ignition" : "counties"));
       else if (pick) {
         // the tooltip under the cursor on or off (off for a clean recording)
         pickRef.current = !pickRef.current;
