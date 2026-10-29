@@ -109,8 +109,9 @@ float fuelHash(vec2 p) {
         float z = g;
         // the hour's weather term, two ways back through the afterglow: the field keeps the weather's own
         // short memory (the strongest recent hour losing 0.3 logit per hour); the ground holds the hour by
-        // what it is (row 1 of the lookup: hold hours per land cover), losing 3 logits over its hold, so grass
-        // lets an afternoon go in a few hours, timber carries it through the night, built ground holds nothing
+        // what it is (row 1 of the lookup: hold hours per land cover): a past hour's term slides from its
+        // value down to half a logit under the gate over the hold, so the ground stays lit for that long
+        // after its peak whatever the peak was; grass a few hours, timber through the night, built ground none
         float wx = -99.0;
         float wxG = -99.0;
         float hold = hasGround ? texelFetch(lutTex, ivec2(int(ci + 0.5), 1), 0).r * 255.0 / ${HOLD_SCALE}.0 : 0.0;
@@ -125,7 +126,7 @@ float fuelHash(vec2 p) {
             float wk = texture(ffwiTex, vec3(geometry.uv, l)).r;
             if (isnan(wk)) continue;
             wx = max(wx, wk - 0.3 * float(k));
-            if (hold > 0.0) wxG = max(wxG, wk - 3.0 * float(k) / hold);
+            if (hold > 0.0) wxG = max(wxG, wk - max(wk - (${MODULE_NAME}.wxGate - 0.5), 0.0) * min(float(k) / hold, 1.0));
           }
           z = g + wxG;
         }

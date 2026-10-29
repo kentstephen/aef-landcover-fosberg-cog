@@ -396,8 +396,9 @@ export function ControlPanel(p: ControlPanelProps) {
               <span>{p.glowHours === 0 ? "Afterglow: off (this hour only)" : `Afterglow: looks back ${p.glowHours} h, the ground holding by land cover`}</span>
               <Help label="Afterglow">
                 The ignition head says when a fire could start; a fire that started keeps burning. So the ground holds the
-                strongest recent hour by what it is: the weather term fades 3 logits over the land cover's hold, grass and
-                crops in a few hours, timber through the night, built ground and water not at all. The gray weather field
+                strongest recent hour by what it is: it stays lit for the land cover's hold hours after that hour, fading
+                from its peak back under the gate over that time, grass and crops in a few hours, timber through the night,
+                built ground and water not at all. The gray weather field
                 keeps the weather's own memory, 0.3 logit an hour, so the current moves on while the ground remembers it.
                 Hold hours ({p.teacher === "nlcd" ? "NLCD" : "Esri"}):{" "}
                 {HEADS[p.teacher].classes.map((code, i) => `${HEADS[p.teacher].names[i]} ${HOLD[p.teacher][code] ?? 0}`).join(", ")}.
