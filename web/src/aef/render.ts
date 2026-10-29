@@ -91,6 +91,8 @@ uniform sampler2D lutTex;
 uniform sampler2D rampTex;
 
 const float WX_NAN = intBitsToFloat(0x7fc00000);
+/** A node outside the HRRR grid holds -Infinity at every hour: no weather here, ever. */
+const float WX_OUT = uintBitsToFloat(0xff800000u);
 
 /** Catmull-Rom weights for the four samples around a fraction t (at -1, 0, 1, 2). */
 vec4 wxCatmull(float t) {
@@ -113,17 +115,19 @@ float wxLayer(vec2 uv, int l) {
   vec4 wy = wxCatmull(f.y);
   float acc = 0.0;
   float wsum = 0.0;
+  bool outside = false;
   for (int j = 0; j < 4; j++) {
     for (int i = 0; i < 4; i++) {
       ivec2 q = clamp(ivec2(p0) + ivec2(i - 1, j - 1), ivec2(0), sz.xy - 1);
       float v = texelFetch(ffwiTex, ivec3(q, l), 0).r;
       if (isnan(v)) continue;
+      if (isinf(v)) { outside = true; continue; }
       float w = wx[i] * wy[j];
       acc += w * v;
       wsum += w;
     }
   }
-  return wsum > 0.05 ? acc / wsum : WX_NAN;
+  return wsum > 0.05 ? acc / wsum : (outside ? WX_OUT : WX_NAN);
 }
 
 /**
@@ -139,6 +143,7 @@ float wxAt(vec2 uv, float l) {
   float b = wxLayer(uv, int(l0) + 1);
   if (isnan(a)) return b;
   if (isnan(b)) return a;
+  if (isinf(a) || isinf(b)) return WX_OUT;
   return mix(a, b, f);
 }
 
@@ -169,6 +174,9 @@ float fuelHash(vec2 p) {
         float hold = hasGround ? texelFetch(lutTex, ivec2(int(ci + 0.5), 1), 0).r * 255.0 / ${HOLD_SCALE}.0 : 0.0;
         if (${MODULE_NAME}.useWeather > 0.5) {
           float wl = wxAt(geometry.uv, ${MODULE_NAME}.layerIndex);
+          // the ground and the weather are one footprint: outside the HRRR grid nothing draws; a pixel whose
+          // shard is not in hand yet (NaN) keeps the standing gray until it arrives
+          if (isinf(wl)) discard;
           if (!isnan(wl)) { wx = wl; wxG = wl; }
           int back = int(min(${MODULE_NAME}.glowHours, 48.0));
           for (int k = 1; k <= 48; k++) {
@@ -181,9 +189,6 @@ float fuelHash(vec2 p) {
             if (hold > 0.0) wxG = max(wxG, wk - max(wk - (${MODULE_NAME}.wxGate - 0.5), 0.0) * min(float(k) / hold, 1.0));
           }
           z = g + wxG;
-          // the ground and the weather are one footprint: a pixel with no weather for this hour (outside
-          // the HRRR grid, or its shard not in hand yet) draws nothing, not a standing gray
-          if (wx < -90.0) discard;
         }
         // the weather field under everything: the term as gray, dark 3 logits below the gate, pale at it
         vec4 under = vec4(0.0);

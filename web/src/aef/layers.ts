@@ -409,7 +409,7 @@ export class AefLayers {
           if (useWeather) {
             const nx = Math.min(cols - 1, Math.floor((x / t.width) * cols));
             const wv = t.weatherNodes[off + ny * cols + nx]!;
-            if (wv !== wv) continue;
+            if (!Number.isFinite(wv)) continue;
             z += wv;
           }
           vals.push(z);

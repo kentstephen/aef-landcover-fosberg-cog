@@ -99,6 +99,7 @@ export function weatherTexture(device: Device, g: WeatherGrid, src: WeatherSourc
   const nodes = new Float32Array(depth * per).fill(NaN);
   const data = new Uint16Array(depth * per);
   const nan = toHalf(NaN);
+  const out = toHalf(-Infinity);
   const acc = new Float32Array(depth);
   const wsum = new Float32Array(depth);
   const s = new Float32Array(depth);
@@ -106,7 +107,12 @@ export function weatherTexture(device: Device, g: WeatherGrid, src: WeatherSourc
     const x = g.fx[k]!;
     const y = g.fy[k]!;
     if (!Number.isFinite(x)) {
-      for (let l = 0; l < depth; l++) data[l * per + k] = nan;
+      // outside the HRRR grid: -Infinity at every hour, so the shader can tell "no weather here, ever" from
+      // "not in hand yet" (NaN) and draw nothing there rather than the standing ground
+      for (let l = 0; l < depth; l++) {
+        data[l * per + k] = out;
+        nodes[l * per + k] = -Infinity;
+      }
       continue;
     }
     // the 4 x 4 pixel centers around the node with Catmull-Rom weights (a smooth surface through the pixel
