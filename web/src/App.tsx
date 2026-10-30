@@ -44,6 +44,8 @@ import { ControlPanel, loadingSummary, type ColormapChoiceId, type FuelChoice, t
 const MAP_STYLE_URL = "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 /** First basemap layer above water in CARTO styles; data goes under roads/labels. */
 const BEFORE_ID = "aeroway-runway";
+/** How long the window's dates hold still before its weather starts loading. */
+const WINDOW_SETTLE_MS = 700;
 /** 100 ms a frame: a week in 17 s. */
 const INITIAL_FRAME_MS = 200; // 72 hours in about 14 s
 /**
@@ -352,9 +354,12 @@ export default function App() {
   const [contourStep, setContourStep] = useState(0);
   const [zoom, setZoom] = useState(START_VIEW.zoom);
   const [view, setView] = useState<[number, number, number, number] | null>(null);
+  const viewRef = useRef<[number, number, number, number] | null>(null);
   const readView = (m: import("maplibre-gl").Map) => {
     const b = m.getBounds();
-    setView([b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]);
+    const v: [number, number, number, number] = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+    viewRef.current = v;
+    setView(v);
   };
   useEffect(() => {
     const m = mapRef.current?.getMap();
@@ -393,20 +398,35 @@ export default function App() {
   const [hourIdx, setHourIdx] = useState(0);
   const [week, setWeek] = useState<WeekWeather | null>(null);
   const [weekVersion, setWeekVersion] = useState(0);
-  const weekSpec = useMemo<WeekSpec>(() => ({ start: weekStart, days: weekDays }), [weekStart, weekDays]);
+  // The window the weather loads for settles first: a date field fires a change on every step of its picker
+  // or every typed digit, and each change would start a window's fetches. The panel shows the dates at once;
+  // the loading starts once they have held still for WINDOW_SETTLE_MS.
+  const [weekSpec, setWeekSpec] = useState<WeekSpec>(() => ({ start: weekStart, days: weekDays }));
+  useEffect(() => {
+    if (weekSpec.start.getTime() === weekStart.getTime() && weekSpec.days === weekDays) return;
+    const t = setTimeout(() => setWeekSpec({ start: weekStart, days: weekDays }), WINDOW_SETTLE_MS);
+    return () => clearTimeout(t);
+  }, [weekStart, weekDays, weekSpec]);
   useEffect(() => {
     if (!source || timeMode !== "week") return;
-    const w = new WeekWeather(source.arrays, weekSpec, windMode, source.initTimeCount);
-    const l = () => setWeekVersion(w.version);
+    const w = new WeekWeather(weekSpec, windMode, source.initTimeCount);
+    // the week ticks on every shard started and finished: the app re-renders at most every 250 ms for it
+    let timer = 0;
+    const l = () => {
+      if (timer) return;
+      timer = window.setTimeout(() => {
+        timer = 0;
+        setWeekVersion(w.version);
+      }, 250);
+    };
     w.listeners.add(l);
     setWeek(w);
     setHourIdx((h) => Math.min(h, w.depth - 1));
     nextHourRef.current = (h) => w.nextHour(h);
     needWeatherRef.current = (px, py) => w.ensure(px, py);
-    // tiles already on hand (a switch from the run, or another week): their shards for this week
-    const live = aefLayersRef.current?.live;
-    if (live) w.setView(Array.from(live.values(), (t) => t.grid));
+    if (viewRef.current) w.setViewBox(viewRef.current);
     return () => {
+      clearTimeout(timer);
       needWeatherRef.current = () => {};
       nextHourRef.current = (h) => (h + 1) % depthRef.current;
       w.listeners.delete(l);
@@ -418,12 +438,13 @@ export default function App() {
   useEffect(() => {
     week?.focus(hourIdx);
   }, [week, hourIdx]);
-  // the view moved: the shards under the tiles on screen are the view (first in the queue, the loading bar)
+  // the view moved: only the shards under the map's bounds are fetched (zoomed in on a region, that region),
+  // and the tiles on screen get their weather textures first
   useEffect(() => {
-    const live = aefLayersRef.current?.live;
-    if (week && live) week.setView(Array.from(live.values(), (t) => t.grid));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [week, view, aefVersion]);
+    if (!view) return;
+    week?.setViewBox(view);
+    aefLayers?.setViewBox(view);
+  }, [week, aefLayers, view]);
 
   // The ground needs the forecast under every tile it holds, whether or not the field is drawn:
   // a side channel fetches the shards the tiles ask for (it skips cached shards).
@@ -457,7 +478,7 @@ export default function App() {
   }, [fuel, countyTable, view, countyVersion, week, timeMode, initTimeIdx]);
   /** The layer of the weather texture on screen: the lead hour of the run or the hour of the week. */
   const timeIdx = timeMode === "week" ? hourIdx : leadTimeIdx;
-  const timeDepth = timeMode === "week" ? weekDays * HOURS_PER_DAY : HRRR_LEAD_TIME_COUNT;
+  const timeDepth = timeMode === "week" ? weekSpec.days * HOURS_PER_DAY : HRRR_LEAD_TIME_COUNT;
   /** Where the tiles' weather textures read from, and a key that changes when that does. */
   const ignitionLike = fuel === "ignition" || fuel === "counties";
   const runSource = useMemo(() => cacheSource(cacheRef.current, ignitionLike ? "ignition" : "ffwi"), [ignitionLike]);
@@ -676,7 +697,7 @@ export default function App() {
     weekDone: timeMode === "week" && week ? week.progress.done : 0,
     weekWanted: timeMode === "week" && week ? week.progress.wanted : 0,
     weekDaysIn: timeMode === "week" && week ? week.daysReady() : 0,
-    weekDaysTotal: timeMode === "week" ? weekDays : 0,
+    weekDaysTotal: timeMode === "week" ? weekSpec.days : 0,
     error,
   };
   const loading = loadingSummary(status);
@@ -710,6 +731,11 @@ export default function App() {
         hash
         mapStyle={MAP_STYLE_URL}
         attributionControl={false}
+        // a flat, north-up map: no tilt or turn from a two-finger trackpad drag, right drag or touch
+        maxPitch={0}
+        dragRotate={false}
+        pitchWithRotate={false}
+        touchPitch={false}
         onLoad={(e) => {
           setZoom(e.target.getZoom());
           addHillshade(e.target, relief);

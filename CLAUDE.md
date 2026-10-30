@@ -32,6 +32,22 @@ weights; static site.
 Order of work: Python first (the model, checked by looking at its land cover
 maps), then the TypeScript map.
 
+## Status (2026-10-30, loading off the main thread)
+
+- The window's HRRR shards are fetched, decoded and turned into the weather term in a worker
+  (`web/src/hrrr/week.worker.ts`); `week.ts` keeps the bytes and the queue. Only the shards under the map's
+  bounds are fetched (`setViewBox`); zoomed in on a region, that region alone.
+- A date change loads after the dates hold still for 700 ms (`WINDOW_SETTLE_MS` in `App.tsx`): the date
+  fields fire a change on every picker step or typed digit.
+- Tile weather textures rebuild from a queue, about 8 ms at a time, on-screen tiles first (`layers.ts`
+  `drain`); each HRRR pixel's series is read once per texture (`weather.ts` `pixelSeries`).
+- Open water is not ground in the risk view (`WATER` in `fuel.ts`, row 1 g of the lookup): the near-shore
+  water the embeddings cover reads the same as the open water past them.
+- The map is flat and north-up (no pitch or rotate gestures).
+- Measured headless: stalls while a window loads fell from up to 2.7 s to about 0.2 s. What remains on the
+  main thread while playing is React re-rendering the app every frame (the hour fraction is state).
+- Probes: `.claude/memory/probe_datesteps.py`, `probe_cpuprof.py`, `probe_zoomview.py`, `probe_coast.py`.
+
 ## Status (2026-10-29, counties branch)
 
 - Branch `counties`: a "Counties" ground mode, the pixel picture averaged by county live in the browser
@@ -127,7 +143,7 @@ maps), then the TypeScript map.
   ridge 64 -> canopy cover, mean height, p95 height. All linear: a few vec4
   uniforms in a shader.
 - Training cells are pure (at least 12 of the 16 children carry the majority
-  class). Holdout tiles are never fit on; their accuracy is the honest number.
+  class). Holdout tiles are never fit on; their accuracy is the number to trust.
 - Labels are 2024 (Esri IO has no 2025), embeddings are 2025.
 
 ## Data (all public, no tokens)

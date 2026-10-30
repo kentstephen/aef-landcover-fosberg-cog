@@ -43,6 +43,8 @@ export const HOLD_NLCD: Record<number, number> = {
 export const HOLD_ESRI: Record<number, number> = {
   1: 0, 2: 20, 4: 10, 5: 4, 7: 2, 8: 2, 9: 0, 10: 0, 11: 6,
 };
+/** Open water in each head's classes: in the risk view water is not ground, so all water shows the weather field alone. */
+export const WATER: Record<Teacher, number> = { nlcd: 11, esri: 1 };
 export const HOLD: Record<Teacher, Record<number, number>> = { nlcd: HOLD_NLCD, esri: HOLD_ESRI };
 /** The hold hours are stored in the lookup texture as a byte, hours x HOLD_SCALE (so up to 127 h). */
 export const HOLD_SCALE = 2;
@@ -54,7 +56,7 @@ export function fuelOf(teacher: Teacher, classIndex: number): number {
 
 /**
  * One column per class index, two rows: row 0 rgb = the land cover color, a = the fuel weight x 255;
- * row 1 r = the hold hours x HOLD_SCALE. 32 wide (16 NLCD classes fit).
+ * row 1 r = the hold hours x HOLD_SCALE, g = 255 for open water. 32 wide (16 NLCD classes fit).
  */
 export const LUT_WIDTH = 32;
 export const LUT_HEIGHT = 2;
@@ -70,6 +72,7 @@ export function lutBytes(teacher: Teacher): Uint8Array {
     out[i * 4 + 3] = Math.round((FUEL[teacher][code] ?? 0) * 255);
     const o = (LUT_WIDTH + i) * 4;
     out[o] = Math.min(255, Math.round((HOLD[teacher][code] ?? 0) * HOLD_SCALE));
+    out[o + 1] = WATER[teacher] === code ? 255 : 0;
     out[o + 3] = 255;
   });
   return out;

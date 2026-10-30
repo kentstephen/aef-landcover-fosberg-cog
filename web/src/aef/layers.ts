@@ -167,31 +167,74 @@ export class AefLayers {
     return { ramp: this.ramp, luts: this.luts };
   }
 
+  /** Tiles whose weather texture is waiting to be rebuilt (rebuilt a few at a time, see `drain`). */
+  private stale = new Set<AefTile>();
+  private draining = false;
+  /** The map's bounds: the tiles under them are rebuilt first. */
+  private viewBox: [number, number, number, number] | null = null;
+
+  setViewBox(box: [number, number, number, number]) {
+    this.viewBox = box;
+  }
+
   /**
    * The weather changed (a shard arrived, the fuel lag moved, the source switched): the weather texture anew
    * for the tiles it concerns. A tile whose nodes all had weather, at this lag and source, keeps its texture:
-   * a shard arriving elsewhere does not touch it, so the main thread is not held for every tile on every shard.
+   * a shard arriving elsewhere does not touch it. The rebuilds are queued and done a few milliseconds at a
+   * time, the tiles on screen first, so the map keeps moving while a window loads.
    */
   refreshWeather(shards?: Set<string>) {
     if (!this.device) return;
-    let changed = 0;
     for (const t of this.live.values()) {
       if (t.weatherComplete && t.weatherTau === this.cache.tau && t.weatherKey === this.weatherKey) continue;
       // only the shards named arrived: a tile over none of them keeps its texture
       if (shards && t.weatherKey === this.weatherKey && !touches(t, shards)) continue;
-      const old = t.ffwiTex;
-      const w = weatherTexture(this.device, t.grid, this.source);
-      t.ffwiTex = w.tex;
-      t.weatherComplete = w.complete;
-      t.weatherTau = this.cache.tau;
-      t.weatherKey = this.weatherKey;
-      later(old);
-      changed++;
+      this.stale.add(t);
     }
-    if (changed === 0) return;
-    this.version++;
-    this.redraw();
+    if (this.stale.size > 0 && !this.draining) {
+      this.draining = true;
+      setTimeout(this.drain, 0);
+    }
   }
+
+  /** Rebuild stale weather textures for about 8 ms, on-screen tiles first, then yield to the next frame. */
+  private drain = () => {
+    const t0 = performance.now();
+    const vb = this.viewBox;
+    const onScreen = (t: AefTile) => !vb || !(t.bbox[2] < vb[0] || t.bbox[0] > vb[2] || t.bbox[3] < vb[1] || t.bbox[1] > vb[3]);
+    let changed = 0;
+    for (const pass of [true, false]) {
+      for (const t of this.stale) {
+        if (performance.now() - t0 > 8) break;
+        if (t.gone || !this.device) {
+          this.stale.delete(t);
+          continue;
+        }
+        if (onScreen(t) !== pass) continue;
+        this.stale.delete(t);
+        const old = t.ffwiTex;
+        const w = weatherTexture(this.device, t.grid, this.source);
+        t.ffwiTex = w.tex;
+        t.weatherComplete = w.complete;
+        t.weatherTau = this.cache.tau;
+        t.weatherKey = this.weatherKey;
+        later(old);
+        changed++;
+      }
+    }
+    if (changed > 0) this.version++;
+    // the redraw re-renders the app: at most every 150 ms while the queue drains, and once when it is empty
+    const now = performance.now();
+    if (this.version !== this.drawnVersion && (this.stale.size === 0 || now - this.lastRedraw > 150)) {
+      this.drawnVersion = this.version;
+      this.lastRedraw = now;
+      this.redraw();
+    }
+    if (this.stale.size > 0) setTimeout(this.drain, 0);
+    else this.draining = false;
+  };
+  private drawnVersion = -1;
+  private lastRedraw = 0;
 
   private finish(
     device: Device,

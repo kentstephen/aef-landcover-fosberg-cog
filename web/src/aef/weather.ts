@@ -91,6 +91,49 @@ function catmull(t: number, w: Float32Array): void {
 const wx4 = new Float32Array(4);
 const wy4 = new Float32Array(4);
 
+/**
+ * Each HRRR pixel's series read once per texture: when the tile's nodes sit closer together than the pixels
+ * (zoomed in), the 16 pixels around one node are mostly the same as its neighbors', so the series of every
+ * pixel under the tile are read up front (when that block is small) and the node loop reads them from there.
+ */
+function pixelSeries(g: WeatherGrid, src: WeatherSource): (x: number, y: number, tmp: Float32Array) => Float32Array {
+  const read = (x: number, y: number, tmp: Float32Array) => {
+    src.series(x, y, tmp);
+    return tmp;
+  };
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (let k = 0; k < g.fx.length; k++) {
+    const x = g.fx[k]!;
+    const y = g.fy[k]!;
+    if (!Number.isFinite(x)) continue;
+    if (x < x0) x0 = x;
+    if (x > x1) x1 = x;
+    if (y < y0) y0 = y;
+    if (y > y1) y1 = y;
+  }
+  if (!Number.isFinite(x0)) return read;
+  // the 4 x 4 neighborhood reaches 2 pixels past the node's center on each side
+  const bx = Math.floor(x0) - 2;
+  const by = Math.floor(y0) - 2;
+  const bw = Math.floor(x1) + 3 - bx;
+  const bh = Math.floor(y1) + 3 - by;
+  // worth it only when the nodes outnumber the pixels; a block of at most 4M values (16 MB, freed with the texture)
+  if (bw * bh > g.fx.length || bw * bh * src.depth > 4_000_000) return read;
+  const depth = src.depth;
+  const block = new Float32Array(bw * bh * depth);
+  const have = new Uint8Array(bw * bh);
+  return (x, y, tmp) => {
+    const i = (y - by) * bw + (x - bx);
+    if (x < bx || y < by || x >= bx + bw || y >= by + bh) return read(x, y, tmp);
+    const view = block.subarray(i * depth, (i + 1) * depth);
+    if (!have[i]) {
+      src.series(x, y, view);
+      have[i] = 1;
+    }
+    return view;
+  };
+}
+
 export function weatherTexture(device: Device, g: WeatherGrid, src: WeatherSource): WeatherTex {
   const per = g.cols * g.rows;
   const depth = src.depth;
@@ -101,6 +144,7 @@ export function weatherTexture(device: Device, g: WeatherGrid, src: WeatherSourc
   const acc = new Float32Array(depth);
   const wsum = new Float32Array(depth);
   const s = new Float32Array(depth);
+  const series = pixelSeries(g, src);
   for (let k = 0; k < per; k++) {
     const x = g.fx[k]!;
     const y = g.fy[k]!;
@@ -129,9 +173,9 @@ export function weatherTexture(device: Device, g: WeatherGrid, src: WeatherSourc
       for (let dy = -1; dy <= 2; dy++) {
         for (let dx = -1; dx <= 2; dx++) {
           const w = wx4[dx + 1]! * wy4[dy + 1]!;
-          src.series(x0 + dx, y0 + dy, s);
+          const sv = series(x0 + dx, y0 + dy, s);
           for (let l = 0; l < depth; l++) {
-            const v = s[l]!;
+            const v = sv[l]!;
             if (v === v) {
               acc[l] = acc[l]! + w * v;
               wsum[l] = wsum[l]! + w;
@@ -147,9 +191,9 @@ export function weatherTexture(device: Device, g: WeatherGrid, src: WeatherSourc
           const xx = x0 + dx;
           const yy = y0 + dy;
           if (!src.inGrid(xx, yy)) continue;
-          src.series(xx, yy, s);
+          const sv = series(xx, yy, s);
           for (let l = 0; l < depth; l++) {
-            const v = s[l]!;
+            const v = sv[l]!;
             if (v === v) {
               acc[l] = acc[l]! + w * v;
               wsum[l] = wsum[l]! + w;

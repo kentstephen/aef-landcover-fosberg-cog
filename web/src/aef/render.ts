@@ -156,6 +156,9 @@ float fuelHash(vec2 p) {
     "fs:DECKGL_FILTER_COLOR": /* glsl */ `
       float ci = texture(classTex, geometry.uv).r * 255.0;
       bool hasGround = ci <= 254.5;
+      // in the risk view open water is not ground: the near-shore water the embeddings cover then reads the same
+      // as the open water past them (the weather field alone), with no band ending at the edge of the AEF files
+      if (hasGround && ${MODULE_NAME}.mode > 1.5 && texelFetch(lutTex, ivec2(int(ci + 0.5), 1), 0).g > 0.5) hasGround = false;
       bool field = ${MODULE_NAME}.mode > 1.5 && ${MODULE_NAME}.fieldAlpha > 0.0 && ${MODULE_NAME}.useWeather > 0.5;
       if (!hasGround && !field) discard;
       vec4 lut = hasGround ? texelFetch(lutTex, ivec2(int(ci + 0.5), 0), 0) : vec4(0.0);
