@@ -2,6 +2,10 @@
 
 **Live map: https://kentstephen.github.io/aef-landcover-fosberg-cog/** (static site, built from `main` by GitHub Actions; everything is read from the public cloud stores in the browser)
 
+**Work in progress.** This is a demonstration, still being worked on, especially its speed. Everything is read
+and computed in your browser, so it is heavy: expect your computer's fans while it loads and plays. Space pauses
+playback; zooming in on a region loads far less than the whole country.
+
 A browser-only map of where wildfires are more or less likely to start, hour by hour. Every pixel's
 **AlphaEarth Foundations embedding** (64 bands, 10 m, public COGs and a Zarr mosaic on Source Cooperative)
 goes through a small logistic head together with the hour's weather from the **NOAA HRRR forecast**

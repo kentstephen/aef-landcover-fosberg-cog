@@ -8,6 +8,7 @@ import { ZarrLayer } from "@developmentseed/deck.gl-zarr";
 import { PathLayer } from "@deck.gl/layers";
 import type { Device, Texture } from "@luma.gl/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { MapboxOverlay } from "@deck.gl/mapbox";
 import type { MapRef } from "react-map-gl/maplibre";
 import { Map as MaplibreMap } from "react-map-gl/maplibre";
 import type * as zarr from "zarrita";
@@ -188,22 +189,37 @@ export default function App() {
   const [leadTimeIdx, setLeadTimeIdx] = useState(START_LEAD);
   const [isPlaying, setIsPlaying] = useState(true);
   const [frameDurationMs, setFrameDurationMs] = useState(INITIAL_FRAME_MS);
-  /** How far into the hour the playhead is, 0..1 in 24 steps, so the ground glides between hours while playing. */
-  const [hourFrac, setHourFrac] = useState(0);
+  /**
+   * How far into the hour the playhead is, 0..1 in 24 steps, so the ground glides between hours while playing.
+   * Kept out of React state: it changes nearly every frame, and only the map needs it. The play loop hands the
+   * map new layers itself (`pushFrac`); the app re-renders only when the hour steps.
+   */
+  const hourFracRef = useRef(0);
+  const overlayRef = useRef<MapboxOverlay | null>(null);
+  const buildLayersRef = useRef<(frac: number) => unknown[]>(() => []);
+  const pushFrac = (frac: number) => {
+    if (frac === hourFracRef.current) return;
+    hourFracRef.current = frac;
+    overlayRef.current?.setProps({ layers: buildLayersRef.current(frac) as never });
+  };
   useEffect(() => {
     if (!isPlaying) {
-      setHourFrac(0);
+      pushFrac(0);
       return;
     }
     let raf = 0;
     let last = performance.now();
     const loop = (now: number) => {
       if (now - last >= frameDurationMs) {
+        // the hour steps: React draws the new hour at fraction 0 (pushing 0 here first would show the old hour
+        // at its start for a frame)
+        hourFracRef.current = 0;
         if (timeModeRef.current === "week") setHourIdx((i) => nextHourRef.current(i));
         else setLeadTimeIdx((i) => (i + 1) % HRRR_LEAD_TIME_COUNT);
         last = now;
+      } else {
+        pushFrac(Math.min(23, Math.floor(((now - last) / frameDurationMs) * 24)) / 24);
       }
-      setHourFrac(Math.min(23, Math.floor(((now - last) / frameDurationMs) * 24)) / 24);
       raf = requestAnimationFrame(loop);
     };
     raf = requestAnimationFrame(loop);
@@ -590,7 +606,7 @@ export default function App() {
     mapRef.current?.getMap().fitBounds([[bbox[0], bbox[1]], [bbox[2], bbox[3]]], { padding: 80, duration: 900 });
   }, []);
 
-  const deckLayers = useMemo(() => {
+  const buildLayers = useCallback((hourFrac: number) => {
     const out: unknown[] = [];
     if (showRaster && source && getTileData && colormapTexture) {
       out.push(
@@ -684,8 +700,10 @@ export default function App() {
     showRaster, source, getTileData, colormapTexture, initTimeIdx, windMode, rasterVariable, selection, renderTile, rasterOpacity,
     leadTimeIdx, colormapIndex, hideBelow, rescaleMax, tauHours, aefLayers, aefVersion, fuel, teacher, fuelOpacity, groundRamp, zoom,
     glowHours, grain, light, contourLines, pHide, pMax, ignScale, zLo, zHi, rankRamp, useWeather, standingAlpha, wxGate, fieldAlpha,
-    timeIdx, hourFrac, weatherSrc, weatherKey, timeMode, countyTable, counties, countyVersion, cacheVersion, weekVersion, timeDepth, zHideCounty, wxGate,
+    timeIdx, weatherSrc, weatherKey, timeMode, countyTable, counties, countyVersion, cacheVersion, weekVersion, timeDepth, zHideCounty, wxGate,
   ]);
+  buildLayersRef.current = buildLayers;
+  const deckLayers = useMemo(() => buildLayers(hourFracRef.current), [buildLayers]);
 
   const status: Status = {
     backend: source?.backend ?? null,
@@ -746,7 +764,7 @@ export default function App() {
         onMouseMove={(e) => { if (pickRef.current) setHover({ lon: e.lngLat.lng, lat: e.lngLat.lat, x: e.point.x, y: e.point.y }); }}
         onMouseOut={() => setHover(null)}
       >
-        <DeckGlOverlay layers={deckLayers as never} interleaved onDeviceInitialized={setDevice} />
+        <DeckGlOverlay layers={deckLayers as never} interleaved onDeviceInitialized={setDevice} overlayRef={overlayRef} />
       </MaplibreMap>
       {loading ? (
         <div
