@@ -13,6 +13,13 @@ goes through a small logistic head together with the hour's weather from the **N
 offline on 22,204 WFIGS wildfire ignitions (2019 to 2026, known cause) against control pixel-hours 20 to
 30 km away at other hours. It is a risk outlook, not a detection: nothing on the map is an actual fire.
 
+**Fuel vs not fuel:** the ground score here learned where people start fires, so it lights roads and town edges
+as well as wildland. For a map of where the fuel is, the better model is in
+[aef-hls-s1-fire-knn-hrrr](https://github.com/kentstephen/aef-hls-s1-fire-knn-hrrr): a small network on the same
+AlphaEarth embeddings, fit to LANDFIRE LF2024 fuel models over 580 windows across California (AUC 0.956 held out
+by 50 km block), and a little better than LANDFIRE at finding where 2025 fires burned (0.586 vs 0.539). It maps
+burnable land, not fuel load or dryness.
+
 What the map shows:
 
 - **The weather field**: the weather part of the head's score, drawn in gray under everything.
